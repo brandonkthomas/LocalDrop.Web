@@ -1,0 +1,51 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <AddRazorSupportForMvc>true</AddRazorSupportForMvc>
+        <StaticWebAssetBasePath>apps/blinkbridge</StaticWebAssetBasePath>
+
+        <IndiumProjectPath Condition="'$(IndiumProjectPath)' == '' and Exists('$(MSBuildProjectDirectory)/../../Libraries/Indium/Indium.csproj')">$(MSBuildProjectDirectory)/../../Libraries/Indium/Indium.csproj</IndiumProjectPath>
+        <IndiumProjectPath Condition="'$(IndiumProjectPath)' == ''">$(MSBuildProjectDirectory)/../Submodules/Indium/Indium.csproj</IndiumProjectPath>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <FrameworkReference Include="Microsoft.AspNetCore.App" />
+        <ProjectReference Include="$(IndiumProjectPath)" Condition="Exists('$(IndiumProjectPath)')" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Update="package.json;package-lock.json;tsconfig.json">
+            <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+            <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+        </None>
+        <Content Update="package.json;package-lock.json;tsconfig.json">
+            <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+            <CopyToPublishDirectory>Never</CopyToPublishDirectory>
+        </Content>
+    </ItemGroup>
+
+    <Target Name="BuildBlinkBridgeClient" BeforeTargets="Build">
+        <PropertyGroup>
+            <_BlinkBridgeEntryTs>$(MSBuildProjectDirectory)/wwwroot/ts/blinkbridge.ts</_BlinkBridgeEntryTs>
+            <_BlinkBridgeOutDir>$(MSBuildProjectDirectory)/wwwroot/dist/js</_BlinkBridgeOutDir>
+            <_BlinkBridgeOutFile>$(_BlinkBridgeOutDir)/blinkbridge.js</_BlinkBridgeOutFile>
+            <_EsbuildCliLocal>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/node_modules/esbuild/bin/esbuild'))</_EsbuildCliLocal>
+            <_EsbuildCliPortfolio>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../Portfolio/node_modules/esbuild/bin/esbuild'))</_EsbuildCliPortfolio>
+            <_EsbuildCli Condition="'$(EsbuildCli)' != ''">$(EsbuildCli)</_EsbuildCli>
+            <_EsbuildCli Condition="'$(_EsbuildCli)' == '' and Exists('$(_EsbuildCliLocal)')">$(_EsbuildCliLocal)</_EsbuildCli>
+            <_EsbuildCli Condition="'$(_EsbuildCli)' == '' and Exists('$(_EsbuildCliPortfolio)')">$(_EsbuildCliPortfolio)</_EsbuildCli>
+        </PropertyGroup>
+
+        <Error Condition="'$(_EsbuildCli)' == ''" Text="Missing esbuild CLI. Pass EsbuildCli from a host build or install dependencies in BlinkBridge.Web or Portfolio." />
+
+        <MakeDir Directories="$(_BlinkBridgeOutDir)" />
+
+        <Exec
+                Condition="Exists('$(_BlinkBridgeEntryTs)')"
+                Command="&quot;$(_EsbuildCli)&quot; &quot;$(_BlinkBridgeEntryTs)&quot; --bundle --format=esm --outfile=&quot;$(_BlinkBridgeOutFile)&quot; --log-level=warning" />
+    </Target>
+
+</Project>

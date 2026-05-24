@@ -1,0 +1,146 @@
+@{
+    ViewData["Title"] = "BlinkBridge";
+}
+
+<section class="bb-page" data-bb-app>
+    <div class="bb-shell">
+        <header class="bb-header">
+            <div>
+                <h1>BlinkBridge</h1>
+                <p>QR burst transfer</p>
+            </div>
+            <div class="bb-header__meta" aria-live="polite" data-bb-runtime-status>Offline client</div>
+        </header>
+
+        <div class="bb-switchbar" aria-label="Mode selectors">
+            <div class="bb-toggle-pair" aria-label="Send or receive">
+                <span>Send</span>
+                <label class="comp-toggle bb-toggle">
+                    <input type="checkbox" class="comp-toggle-input" data-bb-mode-toggle aria-label="Switch between send and receive" />
+                    <span class="comp-toggle-track comp-toggle-large" aria-hidden="true">
+                        <span class="comp-toggle-thumb"></span>
+                    </span>
+                </label>
+                <span>Receive</span>
+            </div>
+
+            <div class="bb-toggle-pair" aria-label="Text or file">
+                <span>Text</span>
+                <label class="comp-toggle bb-toggle">
+                    <input type="checkbox" class="comp-toggle-input" data-bb-kind-toggle aria-label="Switch between text and file" />
+                    <span class="comp-toggle-track comp-toggle-large" aria-hidden="true">
+                        <span class="comp-toggle-thumb"></span>
+                    </span>
+                </label>
+                <span>File</span>
+            </div>
+        </div>
+
+        <main class="bb-workspace">
+            <section class="bb-pane bb-pane--send" data-bb-send-panel>
+                <div class="bb-input-panel" data-bb-input-panel>
+                    <div class="bb-field bb-field--text" data-bb-text-field>
+                        <textarea data-bb-text-input spellcheck="true" placeholder="Paste text here"></textarea>
+                    </div>
+
+                    <div class="bb-field bb-field--file" data-bb-file-field hidden>
+                        <input data-bb-file-input id="bb-file-input" type="file" hidden />
+                        <label class="bb-dropzone" for="bb-file-input" data-bb-dropzone>
+                            <span class="bb-dropzone__title">Choose file</span>
+                            <span class="bb-dropzone__meta" data-bb-file-meta>No file selected</span>
+                        </label>
+                    </div>
+
+                    <div class="bb-prep-row">
+                        <label class="bb-preset">
+                            <input data-bb-fast-preset type="checkbox" />
+                            <span>Fast</span>
+                        </label>
+                        <button type="button" class="wa-btn wa-btn--primary bb-primary" data-bb-prepare>Prepare QR Code</button>
+                    </div>
+                </div>
+
+                <div class="bb-qr-stage" data-bb-qr-stage hidden>
+                    <div class="bb-qr-wrap">
+                        <canvas data-bb-qr-canvas width="720" height="720" aria-label="BlinkBridge QR code"></canvas>
+                    </div>
+
+                    <div class="bb-transfer-meta">
+                        <div>
+                            <span data-bb-frame-label>Frame 0 of 0</span>
+                            <span data-bb-frame-kind></span>
+                        </div>
+                        <div data-bb-transfer-size></div>
+                    </div>
+
+                    <div class="bb-player-controls" aria-label="Transfer controls">
+                        <button type="button" class="wa-btn bb-icon-btn" data-bb-prev aria-label="Previous frame" title="Previous frame">
+                            <span aria-hidden="true">&lt;</span>
+                        </button>
+                        <button type="button" class="wa-btn wa-btn--primary" data-bb-play>Pause</button>
+                        <button type="button" class="wa-btn bb-icon-btn" data-bb-next aria-label="Next frame" title="Next frame">
+                            <span aria-hidden="true">&gt;</span>
+                        </button>
+                        <button type="button" class="wa-btn" data-bb-replay>Replay</button>
+                    </div>
+
+                    <label class="bb-speed">
+                        <span>Speed</span>
+                        <input data-bb-speed type="range" min="250" max="1500" step="50" value="600" />
+                        <output data-bb-speed-output>600ms</output>
+                    </label>
+                </div>
+            </section>
+
+            <section class="bb-pane bb-pane--receive" data-bb-receive-panel hidden>
+                <div class="bb-receiver-grid">
+                    <div class="bb-video-frame">
+                        <video data-bb-video playsinline muted></video>
+                        <canvas data-bb-scan-canvas hidden></canvas>
+                    </div>
+
+                    <div class="bb-receive-card">
+                        <div class="bb-receive-actions">
+                            <button type="button" class="wa-btn wa-btn--primary" data-bb-start-camera>Start Camera</button>
+                            <button type="button" class="wa-btn" data-bb-stop-camera disabled>Stop</button>
+                        </div>
+
+                        <dl class="bb-stats">
+                            <div>
+                                <dt>Transfer</dt>
+                                <dd data-bb-receive-transfer>Waiting</dd>
+                            </div>
+                            <div>
+                                <dt>Progress</dt>
+                                <dd data-bb-receive-progress>0 / 0</dd>
+                            </div>
+                            <div>
+                                <dt>Recommended</dt>
+                                <dd data-bb-recommended-speed>600ms</dd>
+                            </div>
+                        </dl>
+
+                        <div class="bb-status" data-bb-receive-status aria-live="polite">Camera idle.</div>
+
+                        <div class="bb-result" data-bb-result hidden>
+                            <textarea data-bb-result-text readonly hidden></textarea>
+                            <a class="wa-btn wa-btn--primary" data-bb-download hidden>Download</a>
+                            <button type="button" class="wa-btn" data-bb-copy hidden>Copy Text</button>
+                            <button type="button" class="wa-btn" data-bb-reset-receiver>Reset</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+</section>
+
+@section Styles {
+    <link rel="stylesheet" href="~/apps/indium/dist/indium.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/components/toggleSwitch.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/apps/blinkbridge/css/blinkbridge.css" asp-append-version="true" />
+}
+
+@section Scripts {
+    <script src="~/apps/blinkbridge/dist/js/blinkbridge.js" type="module" asp-append-version="true"></script>
+}

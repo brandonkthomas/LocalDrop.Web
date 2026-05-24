@@ -1,0 +1,17 @@
+{
+  "name": "blinkbridge-web-client",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild wwwroot/ts/blinkbridge.ts --bundle --format=esm --outfile=wwwroot/dist/js/blinkbridge.js --log-level=warning",
+    "test:protocol": "mkdir -p .tmp && esbuild tests/protocol.test.ts --bundle --platform=node --format=esm --outfile=.tmp/protocol.test.mjs --log-level=warning && node .tmp/protocol.test.mjs"
+  },
+  "dependencies": {
+    "@foxglove/crc": "^1.0.1",
+    "qr": "^0.6.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.3",
+    "typescript": "^5.9.3"
+  }
+}

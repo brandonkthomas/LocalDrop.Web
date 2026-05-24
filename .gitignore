@@ -1,0 +1,13 @@
+*.DS_Store
+.idea/
+.tmp/
+
+# .NET
+bin/
+obj/
+publish/
+
+# Node / TypeScript
+node_modules/
+wwwroot/dist/**/*.map
+wwwroot/dist/js/*.js
