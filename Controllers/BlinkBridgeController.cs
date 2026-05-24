@@ -1,21 +1,21 @@
 using Microsoft.AspNetCore.Mvc;
 
-namespace BlinkBridge.Web.Controllers;
+namespace LocalDrop.Web.Controllers;
 
 /// <summary>
-/// Controller for the BlinkBridge client-side transfer tool.
+/// Controller for the LocalDrop client-side transfer tool.
 /// </summary>
-public class BlinkBridgeController : Controller
+public class LocalDropController : Controller
 {
     /// <summary>
-    /// Display the BlinkBridge app.
+    /// Display the LocalDrop app.
     /// </summary>
     [HttpGet("/blinkbridge")]
     public IActionResult Index()
     {
-        ViewData["Title"] = "BlinkBridge";
+        ViewData["Title"] = "LocalDrop";
         ViewData["IsAppPage"] = true;
 
-        return View("~/Apps/BlinkBridge/Views/Index.cshtml");
+        return View("~/Apps/LocalDrop/Views/Index.cshtml");
     }
 }

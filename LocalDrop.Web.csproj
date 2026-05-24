@@ -9,6 +9,7 @@
 
         <IndiumProjectPath Condition="'$(IndiumProjectPath)' == '' and Exists('$(MSBuildProjectDirectory)/../../Libraries/Indium/Indium.csproj')">$(MSBuildProjectDirectory)/../../Libraries/Indium/Indium.csproj</IndiumProjectPath>
         <IndiumProjectPath Condition="'$(IndiumProjectPath)' == ''">$(MSBuildProjectDirectory)/../Submodules/Indium/Indium.csproj</IndiumProjectPath>
+        <RootNamespace>LocalDrop.Web</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>
@@ -27,11 +28,11 @@
         </Content>
     </ItemGroup>
 
-    <Target Name="BuildBlinkBridgeClient" BeforeTargets="Build">
+    <Target Name="BuildLocalDropClient" BeforeTargets="Build">
         <PropertyGroup>
-            <_BlinkBridgeEntryTs>$(MSBuildProjectDirectory)/wwwroot/ts/blinkbridge.ts</_BlinkBridgeEntryTs>
-            <_BlinkBridgeOutDir>$(MSBuildProjectDirectory)/wwwroot/dist/js</_BlinkBridgeOutDir>
-            <_BlinkBridgeOutFile>$(_BlinkBridgeOutDir)/blinkbridge.js</_BlinkBridgeOutFile>
+            <_LocalDropEntryTs>$(MSBuildProjectDirectory)/wwwroot/ts/blinkbridge.ts</_LocalDropEntryTs>
+            <_LocalDropOutDir>$(MSBuildProjectDirectory)/wwwroot/dist/js</_LocalDropOutDir>
+            <_LocalDropOutFile>$(_LocalDropOutDir)/blinkbridge.js</_LocalDropOutFile>
             <_EsbuildCliLocal>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/node_modules/esbuild/bin/esbuild'))</_EsbuildCliLocal>
             <_EsbuildCliPortfolio>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../Portfolio/node_modules/esbuild/bin/esbuild'))</_EsbuildCliPortfolio>
             <_EsbuildCli Condition="'$(EsbuildCli)' != ''">$(EsbuildCli)</_EsbuildCli>
@@ -39,13 +40,13 @@
             <_EsbuildCli Condition="'$(_EsbuildCli)' == '' and Exists('$(_EsbuildCliPortfolio)')">$(_EsbuildCliPortfolio)</_EsbuildCli>
         </PropertyGroup>
 
-        <Error Condition="'$(_EsbuildCli)' == ''" Text="Missing esbuild CLI. Pass EsbuildCli from a host build or install dependencies in BlinkBridge.Web or Portfolio." />
+        <Error Condition="'$(_EsbuildCli)' == ''" Text="Missing esbuild CLI. Pass EsbuildCli from a host build or install dependencies in LocalDrop.Web or Portfolio." />
 
-        <MakeDir Directories="$(_BlinkBridgeOutDir)" />
+        <MakeDir Directories="$(_LocalDropOutDir)" />
 
         <Exec
-                Condition="Exists('$(_BlinkBridgeEntryTs)')"
-                Command="&quot;$(_EsbuildCli)&quot; &quot;$(_BlinkBridgeEntryTs)&quot; --bundle --format=esm --outfile=&quot;$(_BlinkBridgeOutFile)&quot; --log-level=warning" />
+                Condition="Exists('$(_LocalDropEntryTs)')"
+                Command="&quot;$(_EsbuildCli)&quot; &quot;$(_LocalDropEntryTs)&quot; --bundle --format=esm --outfile=&quot;$(_LocalDropOutFile)&quot; --log-level=warning" />
     </Target>
 
 </Project>

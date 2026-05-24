@@ -46,7 +46,7 @@ declare global {
 function must<T extends Element>(root: ParentNode, selector: string, ctor: { new(): T }): T {
     const el = root.querySelector(selector);
     if (!(el instanceof ctor)) {
-        throw new Error(`BlinkBridge missing element: ${selector}`);
+        throw new Error(`LocalDrop missing element: ${selector}`);
     }
     return el;
 }
@@ -55,7 +55,7 @@ function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
 }
 
-class BlinkBridgeApp {
+class LocalDropApp {
     private readonly root: HTMLElement;
     private readonly modeToggle: HTMLInputElement;
     private readonly contentToggle: HTMLButtonElement;
@@ -280,7 +280,7 @@ class BlinkBridgeApp {
                 ? `Text ready - ${formatBytes(transfer.byteSize)}`
                 : `File ready - ${formatBytes(transfer.byteSize)}`;
         } catch (error) {
-            console.error('[BlinkBridge] Prepare failed', error);
+            console.error('[LocalDrop] Prepare failed', error);
             this.runtimeStatus.textContent = 'Prepare failed';
         }
     }
@@ -417,7 +417,7 @@ class BlinkBridgeApp {
             this.runtimeStatus.textContent = this.nativeDetector ? 'Native scanner' : 'Canvas scanner';
             this.queueScan();
         } catch (error) {
-            console.error('[BlinkBridge] Camera failed', error);
+            console.error('[LocalDrop] Camera failed', error);
             this.receiveStatus.textContent = 'Camera unavailable. Use HTTPS or allow camera access.';
             this.stopCamera();
         }
@@ -450,7 +450,7 @@ class BlinkBridgeApp {
 
             this.scanBusy = true;
             void this.scanOnce()
-                .catch((error) => console.debug('[BlinkBridge] Scan miss', error))
+                .catch((error) => console.debug('[LocalDrop] Scan miss', error))
                 .finally(() => {
                     this.scanBusy = false;
                     this.queueScan();
@@ -682,7 +682,7 @@ function boot(): void {
     const root = document.querySelector<HTMLElement>('[data-bb-app]');
     if (!root) return;
 
-    new BlinkBridgeApp(root).boot();
+    new LocalDropApp(root).boot();
     document.body.dataset.initialState = 'ready';
 }
 
