@@ -2,34 +2,35 @@ import { crc32 } from '@foxglove/crc';
 
 export type QrEcc = 'low' | 'medium';
 
-export interface TextTransfer {
-    frame: string;
-    byteSize: number;
+export interface TransferHeader {
+    v: 1;
+    kind: 'text' | 'file';
+    size: number;
     crcHex: string;
+    count: number;
+    chunkSize: number;
+    filename?: string;
+    textPayload?: string;
 }
 
-export interface FileTransfer {
+export interface PreparedTransfer {
     frames: string[];
-    dataFrameCount: number;
-    filename: string;
+    header: TransferHeader;
     byteSize: number;
     crcHex: string;
-    chunkSize: number;
     ecc: QrEcc;
 }
 
-export type ParsedFrame =
-    | { kind: 'text'; size: number; crcHex: string; data: Uint8Array; text: string }
-    | { kind: 'header'; count: number; filename: string; size: number; crcHex: string }
-    | { kind: 'data'; index: number; data: Uint8Array }
-    | { kind: 'footer'; filename: string; size: number; crcHex: string };
+export interface ReceivedHeader {
+    header: TransferHeader;
+    key: CryptoKey;
+}
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const BYTE_STRING_CHUNK = 0x8000;
-
-export const DEFAULT_CHUNK_SIZE = 1200;
 export const FAST_CHUNK_SIZE = 1800;
+export const FRAME_INTERVAL_MS = 600;
 
 export function bytesToBase64Url(bytes: Uint8Array): string {
     let binary = '';
@@ -76,109 +77,103 @@ export function formatBytes(bytes: number): string {
     return `${(kb / 1024).toFixed(2)} MB`;
 }
 
-export function createTextTransfer(text: string): TextTransfer {
+export async function createTextTransfer(text: string, receiveUrl: string): Promise<PreparedTransfer> {
     const bytes = encodeString(text);
     const crcHex = crc32Hex(bytes);
-    const payload = bytesToBase64Url(bytes);
+    const key = await createKey();
+    const header: TransferHeader = {
+        v: 1,
+        kind: 'text',
+        size: bytes.length,
+        crcHex,
+        count: 0,
+        chunkSize: 0,
+        textPayload: bytesToBase64Url(bytes)
+    };
 
     return {
-        frame: `BBT|${bytes.length}|${crcHex}|${payload}`,
+        frames: [await createHeaderUrl(header, key, receiveUrl)],
+        header,
         byteSize: bytes.length,
-        crcHex
+        crcHex,
+        ecc: 'low'
     };
 }
 
-export function createFileTransfer(
+export async function createFileTransfer(
     fileBytes: Uint8Array,
     filename: string,
-    options: { fast?: boolean; chunkSize?: number } = {}
-): FileTransfer {
+    receiveUrl: string,
+    chunkSize = FAST_CHUNK_SIZE
+): Promise<PreparedTransfer> {
     const safeFilename = filename.trim() || 'blinkbridge-file';
-    const chunkSize = options.chunkSize ?? (options.fast ? FAST_CHUNK_SIZE : DEFAULT_CHUNK_SIZE);
-    const ecc: QrEcc = options.fast ? 'low' : 'medium';
     const crcHex = crc32Hex(fileBytes);
-    const filenamePayload = bytesToBase64Url(encodeString(safeFilename));
-    const dataFrameCount = Math.max(1, Math.ceil(fileBytes.length / chunkSize));
-    const frames: string[] = [
-        `BBH|${dataFrameCount}|${filenamePayload}|${fileBytes.length}|${crcHex}`
-    ];
+    const count = Math.max(1, Math.ceil(fileBytes.length / chunkSize));
+    const key = await createKey();
+    const header: TransferHeader = {
+        v: 1,
+        kind: 'file',
+        filename: safeFilename,
+        size: fileBytes.length,
+        crcHex,
+        count,
+        chunkSize
+    };
+    const frames = [await createHeaderUrl(header, key, receiveUrl)];
 
-    for (let index = 0; index < dataFrameCount; index++) {
+    for (let index = 0; index < count; index++) {
         const start = index * chunkSize;
         const chunk = fileBytes.subarray(start, Math.min(fileBytes.length, start + chunkSize));
-        frames.push(`BBD|${index + 1}|${bytesToBase64Url(chunk)}`);
+        frames.push(await createChunkFrame(index + 1, chunk, key));
     }
-
-    frames.push(`BBF|${filenamePayload}|${fileBytes.length}|${crcHex}`);
 
     return {
         frames,
-        dataFrameCount,
-        filename: safeFilename,
+        header,
         byteSize: fileBytes.length,
         crcHex,
-        chunkSize,
-        ecc
+        ecc: 'low'
     };
 }
 
-export function parseBlinkBridgeFrame(raw: string): ParsedFrame | null {
-    const value = raw.trim();
-    if (!value.startsWith('BB')) return null;
-
-    const parts = value.split('|');
-    const type = parts[0];
-
-    if (type === 'BBT' && parts.length === 4) {
-        const size = parsePositiveInt(parts[1]);
-        const crcHex = parseCrc(parts[2]);
-        if (size === null || crcHex === null) return null;
-
-        const data = base64UrlToBytes(parts[3]);
-        if (data.length !== size || crc32Hex(data) !== crcHex) {
-            return null;
-        }
-
-        return {
-            kind: 'text',
-            size,
-            crcHex,
-            data,
-            text: decodeString(data)
-        };
+export async function parseHeaderUrl(raw: string): Promise<ReceivedHeader | null> {
+    let url: URL;
+    try {
+        url = new URL(raw, globalThis.location?.origin ?? 'http://localhost');
+    } catch {
+        return null;
     }
 
-    if (type === 'BBH' && parts.length === 5) {
-        const count = parsePositiveInt(parts[1]);
-        const filename = decodeString(base64UrlToBytes(parts[2]));
-        const size = parseNonNegativeInt(parts[3]);
-        const crcHex = parseCrc(parts[4]);
-        if (count === null || size === null || crcHex === null || !filename.trim()) return null;
+    if (url.searchParams.get('mode') !== 'receive') return null;
 
-        return { kind: 'header', count, filename, size, crcHex };
+    const encryptedHeader = url.searchParams.get('h');
+    const exportedKey = url.searchParams.get('k');
+    if (!encryptedHeader || !exportedKey) return null;
+
+    try {
+        const key = await importKey(exportedKey);
+        const header = JSON.parse(decodeString(await decryptBytes(encryptedHeader, key))) as TransferHeader;
+        return isValidHeader(header) ? { header, key } : null;
+    } catch {
+        return null;
     }
+}
 
-    if (type === 'BBD' && parts.length === 3) {
-        const index = parsePositiveInt(parts[1]);
-        if (index === null) return null;
+export async function parseChunkFrame(raw: string, key: CryptoKey): Promise<{ index: number; data: Uint8Array } | null> {
+    const match = /^(\d+)\.([A-Za-z0-9_-]+)$/.exec(raw.trim());
+    if (!match) return null;
 
+    const index = Number(match[1]);
+    if (!Number.isSafeInteger(index) || index < 1) return null;
+
+    try {
         return {
-            kind: 'data',
             index,
-            data: base64UrlToBytes(parts[2])
+            data: await decryptBytes(match[2], key)
         };
+    } catch {
+        return null;
     }
-
-    if (type === 'BBF' && parts.length === 4) {
-        const filename = decodeString(base64UrlToBytes(parts[1]));
-        const size = parseNonNegativeInt(parts[2]);
-        const crcHex = parseCrc(parts[3]);
-        if (size === null || crcHex === null || !filename.trim()) return null;
-
-        return { kind: 'footer', filename, size, crcHex };
-    }
-
-    return null;
 }
 
 export function findMissingIndexes(chunks: Map<number, Uint8Array>, count: number): number[] {
@@ -209,17 +204,81 @@ export function assembleChunks(chunks: Map<number, Uint8Array>, count: number): 
     return output;
 }
 
-function parsePositiveInt(value: string): number | null {
-    const parsed = Number(value);
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+async function createHeaderUrl(header: TransferHeader, key: CryptoKey, receiveUrl: string): Promise<string> {
+    const url = new URL(receiveUrl);
+    url.searchParams.set('mode', 'receive');
+    url.searchParams.set('h', await encryptBytes(encodeString(JSON.stringify(header)), key));
+    url.searchParams.set('k', await exportKey(key));
+    return url.toString();
 }
 
-function parseNonNegativeInt(value: string): number | null {
-    const parsed = Number(value);
-    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+async function createChunkFrame(index: number, chunk: Uint8Array, key: CryptoKey): Promise<string> {
+    return `${index}.${await encryptBytes(chunk, key)}`;
 }
 
-function parseCrc(value: string): string | null {
-    const normalized = value.trim().toUpperCase();
-    return /^[0-9A-F]{8}$/.test(normalized) ? normalized : null;
+async function createKey(): Promise<CryptoKey> {
+    return globalThis.crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        true,
+        ['encrypt', 'decrypt']
+    );
+}
+
+async function exportKey(key: CryptoKey): Promise<string> {
+    return bytesToBase64Url(new Uint8Array(await globalThis.crypto.subtle.exportKey('raw', key)));
+}
+
+async function importKey(value: string): Promise<CryptoKey> {
+    return globalThis.crypto.subtle.importKey(
+        'raw',
+        toArrayBuffer(base64UrlToBytes(value)),
+        { name: 'AES-GCM' },
+        false,
+        ['encrypt', 'decrypt']
+    );
+}
+
+async function encryptBytes(bytes: Uint8Array, key: CryptoKey): Promise<string> {
+    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = new Uint8Array(await globalThis.crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+        key,
+        toArrayBuffer(bytes)
+    ));
+    const payload = new Uint8Array(iv.length + encrypted.length);
+    payload.set(iv, 0);
+    payload.set(encrypted, iv.length);
+    return bytesToBase64Url(payload);
+}
+
+async function decryptBytes(payload: string, key: CryptoKey): Promise<Uint8Array> {
+    const bytes = base64UrlToBytes(payload);
+    if (bytes.length <= 12) throw new Error('Encrypted payload missing body.');
+
+    const iv = bytes.subarray(0, 12);
+    const encrypted = bytes.subarray(12);
+    return new Uint8Array(await globalThis.crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: toArrayBuffer(iv) },
+        key,
+        toArrayBuffer(encrypted)
+    ));
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+}
+
+function isValidHeader(header: TransferHeader): boolean {
+    if (header?.v !== 1) return false;
+    if (header.kind !== 'text' && header.kind !== 'file') return false;
+    if (!Number.isSafeInteger(header.size) || header.size < 0) return false;
+    if (!/^[0-9A-F]{8}$/.test(header.crcHex)) return false;
+    if (!Number.isSafeInteger(header.count) || header.count < 0) return false;
+    if (!Number.isSafeInteger(header.chunkSize) || header.chunkSize < 0) return false;
+
+    if (header.kind === 'text') {
+        return typeof header.textPayload === 'string';
+    }
+
+    return Boolean(header.filename?.trim()) && header.count > 0 && header.chunkSize > 0;
 }

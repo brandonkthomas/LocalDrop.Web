@@ -14,13 +14,7 @@ public class BlinkBridgeController : Controller
     public IActionResult Index()
     {
         ViewData["Title"] = "BlinkBridge";
-        ViewData["CanPinchToZoom"] = true;
-        ViewData["IsolatedCss"] = true;
-        ViewData["HideNavbar"] = true;
-        ViewData["ShowLoadingOverlay"] = false;
-        ViewData["ThemeColor"] = "#f4f5f7";
-        ViewData["AppleMobileWebAppTitle"] = "BlinkBridge";
-        ViewData["SuppressCdnPreconnect"] = true;
+        ViewData["IsAppPage"] = true;
 
         return View("~/Apps/BlinkBridge/Views/Index.cshtml");
     }

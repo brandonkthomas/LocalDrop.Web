@@ -2,14 +2,19 @@ import encodeQR from 'qr';
 import decodeQR from 'qr/decode.js';
 import {
     assembleChunks,
+    base64UrlToBytes,
     createFileTransfer,
     createTextTransfer,
     crc32Hex,
+    decodeString,
     findMissingIndexes,
     formatBytes,
-    parseBlinkBridgeFrame,
-    type ParsedFrame,
-    type QrEcc
+    FRAME_INTERVAL_MS,
+    parseChunkFrame,
+    parseHeaderUrl,
+    type PreparedTransfer,
+    type QrEcc,
+    type TransferHeader
 } from './protocol';
 
 type RawQrMatrix = Array<Array<boolean | number>>;
@@ -20,6 +25,7 @@ interface TransferFrame {
     payload: string;
     label: string;
     detail: string;
+    kind: string;
     ecc: QrEcc;
 }
 
@@ -49,16 +55,12 @@ function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
 }
 
-function median(values: number[]): number {
-    if (!values.length) return 600;
-    const sorted = [...values].sort((a, b) => a - b);
-    return sorted[Math.floor(sorted.length / 2)];
-}
-
 class BlinkBridgeApp {
     private readonly root: HTMLElement;
     private readonly modeToggle: HTMLInputElement;
-    private readonly kindToggle: HTMLInputElement;
+    private readonly contentToggle: HTMLButtonElement;
+    private readonly contentToggleIcon: HTMLImageElement;
+    private readonly contentToggleLabel: HTMLElement;
     private readonly sendPanel: HTMLElement;
     private readonly receivePanel: HTMLElement;
     private readonly textField: HTMLElement;
@@ -67,10 +69,7 @@ class BlinkBridgeApp {
     private readonly fileInput: HTMLInputElement;
     private readonly fileMeta: HTMLElement;
     private readonly dropzone: HTMLElement;
-    private readonly prepareBtn: HTMLButtonElement;
-    private readonly fastPreset: HTMLInputElement;
     private readonly qrStage: HTMLElement;
-    private readonly inputPanel: HTMLElement;
     private readonly qrCanvas: HTMLCanvasElement;
     private readonly frameLabel: HTMLElement;
     private readonly frameKind: HTMLElement;
@@ -78,9 +77,6 @@ class BlinkBridgeApp {
     private readonly prevBtn: HTMLButtonElement;
     private readonly playBtn: HTMLButtonElement;
     private readonly nextBtn: HTMLButtonElement;
-    private readonly replayBtn: HTMLButtonElement;
-    private readonly speedInput: HTMLInputElement;
-    private readonly speedOutput: HTMLOutputElement;
     private readonly runtimeStatus: HTMLElement;
     private readonly video: HTMLVideoElement;
     private readonly scanCanvas: HTMLCanvasElement;
@@ -88,7 +84,6 @@ class BlinkBridgeApp {
     private readonly stopCameraBtn: HTMLButtonElement;
     private readonly receiveTransfer: HTMLElement;
     private readonly receiveProgress: HTMLElement;
-    private readonly recommendedSpeed: HTMLElement;
     private readonly receiveStatus: HTMLElement;
     private readonly resultPanel: HTMLElement;
     private readonly resultText: HTMLTextAreaElement;
@@ -103,22 +98,24 @@ class BlinkBridgeApp {
     private frameIndex = 0;
     private playTimer = 0;
     private isPlaying = false;
+    private prepareSequence = 0;
+    private textInputTimer = 0;
     private scanStream: MediaStream | null = null;
     private scanActive = false;
     private scanBusy = false;
     private nativeDetector: NativeBarcodeDetector | null = null;
     private lastRawScan = '';
-    private lastDecodeAt = 0;
-    private decodeIntervals: number[] = [];
     private objectUrl: string | null = null;
-    private receiveHeader: Extract<ParsedFrame, { kind: 'header' }> | null = null;
-    private receiveFooter: Extract<ParsedFrame, { kind: 'footer' }> | null = null;
+    private receiveHeader: TransferHeader | null = null;
+    private receiveKey: CryptoKey | null = null;
     private readonly receiveChunks = new Map<number, Uint8Array>();
 
     constructor(root: HTMLElement) {
         this.root = root;
         this.modeToggle = must(root, '[data-bb-mode-toggle]', HTMLInputElement);
-        this.kindToggle = must(root, '[data-bb-kind-toggle]', HTMLInputElement);
+        this.contentToggle = must(root, '[data-bb-content-toggle]', HTMLButtonElement);
+        this.contentToggleIcon = must(root, '[data-bb-content-toggle-icon]', HTMLImageElement);
+        this.contentToggleLabel = must(root, '[data-bb-content-toggle-label]', HTMLElement);
         this.sendPanel = must(root, '[data-bb-send-panel]', HTMLElement);
         this.receivePanel = must(root, '[data-bb-receive-panel]', HTMLElement);
         this.textField = must(root, '[data-bb-text-field]', HTMLElement);
@@ -127,10 +124,7 @@ class BlinkBridgeApp {
         this.fileInput = must(root, '[data-bb-file-input]', HTMLInputElement);
         this.fileMeta = must(root, '[data-bb-file-meta]', HTMLElement);
         this.dropzone = must(root, '[data-bb-dropzone]', HTMLElement);
-        this.prepareBtn = must(root, '[data-bb-prepare]', HTMLButtonElement);
-        this.fastPreset = must(root, '[data-bb-fast-preset]', HTMLInputElement);
         this.qrStage = must(root, '[data-bb-qr-stage]', HTMLElement);
-        this.inputPanel = must(root, '[data-bb-input-panel]', HTMLElement);
         this.qrCanvas = must(root, '[data-bb-qr-canvas]', HTMLCanvasElement);
         this.frameLabel = must(root, '[data-bb-frame-label]', HTMLElement);
         this.frameKind = must(root, '[data-bb-frame-kind]', HTMLElement);
@@ -138,9 +132,6 @@ class BlinkBridgeApp {
         this.prevBtn = must(root, '[data-bb-prev]', HTMLButtonElement);
         this.playBtn = must(root, '[data-bb-play]', HTMLButtonElement);
         this.nextBtn = must(root, '[data-bb-next]', HTMLButtonElement);
-        this.replayBtn = must(root, '[data-bb-replay]', HTMLButtonElement);
-        this.speedInput = must(root, '[data-bb-speed]', HTMLInputElement);
-        this.speedOutput = must(root, '[data-bb-speed-output]', HTMLOutputElement);
         this.runtimeStatus = must(root, '[data-bb-runtime-status]', HTMLElement);
         this.video = must(root, '[data-bb-video]', HTMLVideoElement);
         this.scanCanvas = must(root, '[data-bb-scan-canvas]', HTMLCanvasElement);
@@ -148,7 +139,6 @@ class BlinkBridgeApp {
         this.stopCameraBtn = must(root, '[data-bb-stop-camera]', HTMLButtonElement);
         this.receiveTransfer = must(root, '[data-bb-receive-transfer]', HTMLElement);
         this.receiveProgress = must(root, '[data-bb-receive-progress]', HTMLElement);
-        this.recommendedSpeed = must(root, '[data-bb-recommended-speed]', HTMLElement);
         this.receiveStatus = must(root, '[data-bb-receive-status]', HTMLElement);
         this.resultPanel = must(root, '[data-bb-result]', HTMLElement);
         this.resultText = must(root, '[data-bb-result-text]', HTMLTextAreaElement);
@@ -161,8 +151,8 @@ class BlinkBridgeApp {
         this.bindEvents();
         this.syncMode();
         this.syncKind();
-        this.syncSpeed();
         this.runtimeStatus.textContent = 'Offline client';
+        void this.loadHeaderFromCurrentUrl();
     }
 
     private bindEvents(): void {
@@ -171,9 +161,19 @@ class BlinkBridgeApp {
             this.syncMode();
         });
 
-        this.kindToggle.addEventListener('change', () => {
-            this.payloadKind = this.kindToggle.checked ? 'file' : 'text';
+        this.contentToggle.addEventListener('click', () => {
+            this.payloadKind = this.payloadKind === 'text' ? 'file' : 'text';
             this.syncKind();
+            if (this.payloadKind === 'text') {
+                this.textInput.focus();
+                void this.prepareTransfer();
+            }
+        });
+
+        this.textInput.addEventListener('focus', () => void this.prepareTransfer());
+        this.textInput.addEventListener('input', () => {
+            window.clearTimeout(this.textInputTimer);
+            this.textInputTimer = window.setTimeout(() => void this.prepareTransfer(), 250);
         });
 
         this.fileInput.addEventListener('change', () => {
@@ -195,16 +195,9 @@ class BlinkBridgeApp {
             this.setSelectedFile(event.dataTransfer?.files?.[0] ?? null);
         });
 
-        this.prepareBtn.addEventListener('click', () => void this.prepareTransfer());
         this.prevBtn.addEventListener('click', () => this.showFrame(this.frameIndex - 1, false));
         this.nextBtn.addEventListener('click', () => this.showFrame(this.frameIndex + 1, false));
         this.playBtn.addEventListener('click', () => this.togglePlayback());
-        this.replayBtn.addEventListener('click', () => this.replay());
-
-        this.speedInput.addEventListener('input', () => {
-            this.syncSpeed();
-            if (this.isPlaying) this.scheduleNextFrame();
-        });
 
         this.startCameraBtn.addEventListener('click', () => void this.startCamera());
         this.stopCameraBtn.addEventListener('click', () => this.stopCamera());
@@ -226,27 +219,25 @@ class BlinkBridgeApp {
     private syncKind(): void {
         this.textField.hidden = this.payloadKind !== 'text';
         this.fileField.hidden = this.payloadKind !== 'file';
+        const isFile = this.payloadKind === 'file';
+        this.contentToggle.setAttribute('aria-label', isFile ? 'Switch to text entry' : 'Switch to file upload');
+        this.contentToggleLabel.textContent = isFile ? 'Text' : 'Upload...';
+        this.contentToggleIcon.src = isFile
+            ? '/apps/indium/assets/svg/cursor-text.svg'
+            : '/apps/indium/assets/svg/paper-clip.svg';
         this.resetPreparedTransfer();
-    }
-
-    private syncSpeed(): void {
-        this.speedOutput.value = `${this.frameDelay()}ms`;
-        this.speedOutput.textContent = `${this.frameDelay()}ms`;
-    }
-
-    private frameDelay(): number {
-        return clamp(Number(this.speedInput.value) || 600, 250, 1500);
     }
 
     private setSelectedFile(file: File | null): void {
         this.selectedFile = file;
         if (!file) {
             this.fileMeta.textContent = 'No file selected';
+            this.resetPreparedTransfer();
             return;
         }
 
         this.fileMeta.textContent = `${file.name} - ${formatBytes(file.size)}`;
-        this.resetPreparedTransfer();
+        void this.prepareTransfer();
     }
 
     private resetPreparedTransfer(): void {
@@ -254,67 +245,54 @@ class BlinkBridgeApp {
         this.frames = [];
         this.frameIndex = 0;
         this.qrStage.hidden = true;
-        this.inputPanel.hidden = false;
     }
 
     private async prepareTransfer(): Promise<void> {
-        try {
-            if (this.payloadKind === 'text') {
-                const text = this.textInput.value;
-                if (!text.trim()) {
-                    this.runtimeStatus.textContent = 'Text required';
-                    return;
-                }
+        const sequence = ++this.prepareSequence;
 
-                const transfer = createTextTransfer(text);
-                this.frames = [{
-                    payload: transfer.frame,
-                    label: 'Frame 1 of 1',
-                    detail: `Text - ${formatBytes(transfer.byteSize)} - CRC ${transfer.crcHex}`,
-                    ecc: 'medium'
-                }];
+        try {
+            let transfer: PreparedTransfer;
+            if (this.payloadKind === 'text') {
+                transfer = await createTextTransfer(this.textInput.value, this.receiveUrl());
             } else {
                 if (!this.selectedFile) {
                     this.runtimeStatus.textContent = 'File required';
+                    this.resetPreparedTransfer();
                     return;
                 }
 
                 const bytes = new Uint8Array(await this.selectedFile.arrayBuffer());
-                const transfer = createFileTransfer(bytes, this.selectedFile.name, {
-                    fast: this.fastPreset.checked
-                });
-
-                this.frames = transfer.frames.map((payload, index) => ({
-                    payload,
-                    label: `Frame ${index + 1} of ${transfer.frames.length}`,
-                    detail: this.describeFileFrame(index, transfer.frames.length, transfer),
-                    ecc: transfer.ecc
-                }));
+                transfer = await createFileTransfer(bytes, this.selectedFile.name, this.receiveUrl());
             }
 
-            this.inputPanel.hidden = true;
+            if (sequence !== this.prepareSequence) return;
+
+            this.frames = transfer.frames.map((payload, index) => ({
+                payload,
+                label: `Frame ${index + 1} of ${transfer.frames.length}`,
+                detail: this.describeFrame(index, transfer),
+                kind: index === 0 ? 'Header URL' : `Chunk ${index}`,
+                ecc: transfer.ecc
+            }));
             this.qrStage.hidden = false;
-            this.showFrame(0, this.frames.length > 1);
+            this.showFrame(0, false);
+            this.runtimeStatus.textContent = transfer.header.kind === 'text'
+                ? `Text ready - ${formatBytes(transfer.byteSize)}`
+                : `File ready - ${formatBytes(transfer.byteSize)}`;
         } catch (error) {
             console.error('[BlinkBridge] Prepare failed', error);
             this.runtimeStatus.textContent = 'Prepare failed';
         }
     }
 
-    private describeFileFrame(
-        index: number,
-        total: number,
-        transfer: { filename: string; byteSize: number; crcHex: string; dataFrameCount: number; chunkSize: number }
-    ): string {
+    private describeFrame(index: number, transfer: PreparedTransfer): string {
         if (index === 0) {
-            return `Header - ${transfer.dataFrameCount} chunks - ${transfer.filename}`;
+            return transfer.header.kind === 'text'
+                ? 'Scan with another device to open the text.'
+                : 'Scan with another device to begin transfer.';
         }
 
-        if (index === total - 1) {
-            return `Footer - ${formatBytes(transfer.byteSize)} - CRC ${transfer.crcHex}`;
-        }
-
-        return `Chunk ${index} of ${transfer.dataFrameCount} - ${transfer.chunkSize} byte target`;
+        return `Chunk ${index} of ${transfer.header.count} - ${formatBytes(transfer.header.chunkSize)} target`;
     }
 
     private showFrame(nextIndex: number, play: boolean): void {
@@ -324,13 +302,13 @@ class BlinkBridgeApp {
         const frame = this.frames[this.frameIndex];
         this.renderQr(frame.payload, frame.ecc);
         this.frameLabel.textContent = frame.label;
-        this.frameKind.textContent = frame.payload.slice(0, 3);
+        this.frameKind.textContent = frame.kind;
         this.transferSize.textContent = frame.detail;
         this.prevBtn.disabled = this.frameIndex === 0;
         this.nextBtn.disabled = this.frameIndex === this.frames.length - 1;
-
         this.isPlaying = play && this.frames.length > 1 && this.frameIndex < this.frames.length - 1;
-        this.playBtn.textContent = this.isPlaying ? 'Pause' : (this.frameIndex === this.frames.length - 1 ? 'Replay' : 'Play');
+        this.playBtn.disabled = this.frames.length <= 1;
+        this.playBtn.textContent = this.isPlaying ? 'Pause' : 'Begin';
 
         if (this.isPlaying) {
             this.scheduleNextFrame();
@@ -372,26 +350,15 @@ class BlinkBridgeApp {
     }
 
     private togglePlayback(): void {
-        if (!this.frames.length) return;
-
-        if (this.frameIndex === this.frames.length - 1) {
-            this.replay();
-            return;
-        }
+        if (!this.frames.length || this.frames.length <= 1) return;
 
         if (this.isPlaying) {
             this.stopPlayback();
-            this.playBtn.textContent = 'Play';
-        } else {
-            this.isPlaying = true;
-            this.playBtn.textContent = 'Pause';
-            this.scheduleNextFrame();
+            this.playBtn.textContent = 'Begin';
+            return;
         }
-    }
 
-    private replay(): void {
-        if (!this.frames.length) return;
-        this.showFrame(0, this.frames.length > 1);
+        this.showFrame(this.frameIndex === 0 || this.frameIndex === this.frames.length - 1 ? 1 : this.frameIndex, true);
     }
 
     private scheduleNextFrame(): void {
@@ -399,9 +366,9 @@ class BlinkBridgeApp {
         if (!this.isPlaying || this.frameIndex >= this.frames.length - 1) return;
 
         this.playTimer = window.setTimeout(() => {
-            const shouldContinue = this.frameIndex + 1 < this.frames.length - 1;
-            this.showFrame(this.frameIndex + 1, shouldContinue);
-        }, this.frameDelay());
+            const nextIndex = this.frameIndex + 1;
+            this.showFrame(nextIndex, nextIndex < this.frames.length - 1);
+        }, FRAME_INTERVAL_MS);
     }
 
     private stopPlayback(): void {
@@ -420,7 +387,10 @@ class BlinkBridgeApp {
         if (this.scanActive) return;
 
         try {
-            this.resetReceiver();
+            if (!this.receiveHeader) {
+                this.resetReceiver();
+            }
+
             this.scanStream = await navigator.mediaDevices.getUserMedia({
                 video: {
                     facingMode: { ideal: 'environment' },
@@ -443,7 +413,7 @@ class BlinkBridgeApp {
             this.scanActive = true;
             this.startCameraBtn.disabled = true;
             this.stopCameraBtn.disabled = false;
-            this.receiveStatus.textContent = 'Scanning.';
+            this.receiveStatus.textContent = this.receiveHeader ? 'Scanning chunks.' : 'Scanning for header.';
             this.runtimeStatus.textContent = this.nativeDetector ? 'Native scanner' : 'Canvas scanner';
             this.queueScan();
         } catch (error) {
@@ -510,22 +480,7 @@ class BlinkBridgeApp {
         if (!raw || raw === this.lastRawScan) return;
 
         this.lastRawScan = raw;
-        const now = performance.now();
-        if (this.lastDecodeAt) {
-            this.decodeIntervals.push(now - this.lastDecodeAt);
-            this.decodeIntervals = this.decodeIntervals.slice(-12);
-            const recommendation = clamp(Math.ceil(median(this.decodeIntervals) * 1.8 / 50) * 50, 250, 1500);
-            this.recommendedSpeed.textContent = `${recommendation}ms`;
-        }
-        this.lastDecodeAt = now;
-
-        const frame = parseBlinkBridgeFrame(raw);
-        if (!frame) {
-            this.receiveStatus.textContent = 'Unsupported QR.';
-            return;
-        }
-
-        this.handleReceivedFrame(frame);
+        await this.handleRawFrame(raw);
     }
 
     private scanViaCanvas(): string {
@@ -552,51 +507,62 @@ class BlinkBridgeApp {
         }
     }
 
-    private handleReceivedFrame(frame: ParsedFrame): void {
-        if (frame.kind === 'text') {
-            this.showTextResult(frame.text, frame.size, frame.crcHex);
+    private async handleRawFrame(raw: string): Promise<void> {
+        const receivedHeader = await parseHeaderUrl(raw);
+        if (receivedHeader) {
+            this.applyReceivedHeader(receivedHeader.header, receivedHeader.key);
             return;
         }
 
-        if (frame.kind === 'header') {
-            const isNewTransfer =
-                !this.receiveHeader
-                || this.receiveHeader.crcHex !== frame.crcHex
-                || this.receiveHeader.size !== frame.size
-                || this.receiveHeader.filename !== frame.filename;
-
-            if (isNewTransfer) {
-                this.resetReceiver(false);
-                this.receiveHeader = frame;
-            }
-
-            this.receiveStatus.textContent = `Header received for ${frame.filename}.`;
-            this.syncReceiveProgress();
+        if (!this.receiveHeader || !this.receiveKey) {
+            this.receiveStatus.textContent = 'Scan the header URL first.';
             return;
         }
 
-        if (frame.kind === 'data') {
-            if (!this.receiveHeader) {
-                this.receiveStatus.textContent = `Chunk ${frame.index} received before header.`;
-                return;
-            }
-
-            if (frame.index > this.receiveHeader.count) {
-                this.receiveStatus.textContent = `Unexpected chunk ${frame.index}.`;
-                return;
-            }
-
-            this.receiveChunks.set(frame.index, frame.data);
-            this.receiveStatus.textContent = `Chunk ${frame.index} received.`;
-            this.syncReceiveProgress();
-            this.tryCompleteFile();
+        const chunk = await parseChunkFrame(raw, this.receiveKey);
+        if (!chunk) {
+            this.receiveStatus.textContent = 'Unsupported QR.';
             return;
         }
 
-        this.receiveFooter = frame;
-        this.receiveStatus.textContent = `Footer received for ${frame.filename}.`;
+        if (chunk.index > this.receiveHeader.count) {
+            this.receiveStatus.textContent = `Unexpected chunk ${chunk.index}.`;
+            return;
+        }
+
+        this.receiveChunks.set(chunk.index, chunk.data);
+        this.receiveStatus.textContent = `Chunk ${chunk.index} received.`;
         this.syncReceiveProgress();
         this.tryCompleteFile();
+    }
+
+    private applyReceivedHeader(header: TransferHeader, key: CryptoKey): void {
+        const isNewTransfer =
+            !this.receiveHeader
+            || this.receiveHeader.crcHex !== header.crcHex
+            || this.receiveHeader.size !== header.size
+            || this.receiveHeader.filename !== header.filename
+            || this.receiveHeader.kind !== header.kind;
+
+        if (isNewTransfer) {
+            this.resetReceiver(false);
+            this.receiveHeader = header;
+            this.receiveKey = key;
+        }
+
+        if (header.kind === 'text') {
+            const bytes = base64UrlToBytes(header.textPayload ?? '');
+            if (bytes.length !== header.size || crc32Hex(bytes) !== header.crcHex) {
+                this.receiveStatus.textContent = 'Text validation failed.';
+                return;
+            }
+
+            this.showTextResult(decodeString(bytes), header.size, header.crcHex);
+            return;
+        }
+
+        this.receiveStatus.textContent = `Header received for ${header.filename}.`;
+        this.syncReceiveProgress();
     }
 
     private syncReceiveProgress(): void {
@@ -607,36 +573,35 @@ class BlinkBridgeApp {
         }
 
         const missing = findMissingIndexes(this.receiveChunks, this.receiveHeader.count);
-        this.receiveTransfer.textContent = `${this.receiveHeader.filename} - ${formatBytes(this.receiveHeader.size)}`;
+        const label = this.receiveHeader.kind === 'file'
+            ? `${this.receiveHeader.filename} - ${formatBytes(this.receiveHeader.size)}`
+            : `Text - ${formatBytes(this.receiveHeader.size)}`;
+        this.receiveTransfer.textContent = label;
         this.receiveProgress.textContent = `${this.receiveChunks.size} / ${this.receiveHeader.count}`;
 
-        if (missing.length && this.receiveFooter) {
+        if (missing.length && this.receiveChunks.size > 0) {
             this.receiveStatus.textContent = `Missing chunks: ${missing.join(', ')}`;
         }
     }
 
     private tryCompleteFile(): void {
-        if (!this.receiveHeader) return;
+        if (!this.receiveHeader || this.receiveHeader.kind !== 'file') return;
 
         const assembled = assembleChunks(this.receiveChunks, this.receiveHeader.count);
         if (!assembled) return;
 
-        const footer = this.receiveFooter;
-        const expectedSize = footer?.size ?? this.receiveHeader.size;
-        const expectedCrc = footer?.crcHex ?? this.receiveHeader.crcHex;
-
-        if (assembled.length !== expectedSize) {
-            this.receiveStatus.textContent = `Size mismatch: ${assembled.length} of ${expectedSize}.`;
+        if (assembled.length !== this.receiveHeader.size) {
+            this.receiveStatus.textContent = `Size mismatch: ${assembled.length} of ${this.receiveHeader.size}.`;
             return;
         }
 
         const actualCrc = crc32Hex(assembled);
-        if (actualCrc !== expectedCrc) {
-            this.receiveStatus.textContent = `CRC mismatch: ${actualCrc} expected ${expectedCrc}.`;
+        if (actualCrc !== this.receiveHeader.crcHex) {
+            this.receiveStatus.textContent = `CRC mismatch: ${actualCrc} expected ${this.receiveHeader.crcHex}.`;
             return;
         }
 
-        this.showFileResult(assembled, footer?.filename || this.receiveHeader.filename, actualCrc);
+        this.showFileResult(assembled, this.receiveHeader.filename ?? 'blinkbridge-file', actualCrc);
     }
 
     private showTextResult(text: string, size: number, crcHex: string): void {
@@ -678,11 +643,9 @@ class BlinkBridgeApp {
     private resetReceiver(clearStatus = true): void {
         this.clearObjectUrl();
         this.receiveHeader = null;
-        this.receiveFooter = null;
+        this.receiveKey = null;
         this.receiveChunks.clear();
         this.lastRawScan = '';
-        this.lastDecodeAt = 0;
-        this.decodeIntervals = [];
         this.resultPanel.hidden = true;
         this.resultText.value = '';
         this.downloadLink.hidden = true;
@@ -690,8 +653,21 @@ class BlinkBridgeApp {
         this.resultText.hidden = true;
         this.receiveTransfer.textContent = 'Waiting';
         this.receiveProgress.textContent = '0 / 0';
-        this.recommendedSpeed.textContent = '600ms';
         if (clearStatus) this.receiveStatus.textContent = this.scanActive ? 'Scanning.' : 'Camera idle.';
+    }
+
+    private async loadHeaderFromCurrentUrl(): Promise<void> {
+        const receivedHeader = await parseHeaderUrl(window.location.href);
+        if (!receivedHeader) return;
+
+        this.mode = 'receive';
+        this.modeToggle.checked = true;
+        this.syncMode();
+        this.applyReceivedHeader(receivedHeader.header, receivedHeader.key);
+    }
+
+    private receiveUrl(): string {
+        return new URL('/blinkbridge', window.location.origin).toString();
     }
 
     private clearObjectUrl(): void {
