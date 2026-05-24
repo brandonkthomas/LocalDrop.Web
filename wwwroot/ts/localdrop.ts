@@ -1,5 +1,5 @@
 import encodeQR from 'qr';
-import decodeQR from 'qr/decode.js';
+import jsQR from 'jsqr';
 import {
     assembleChunks,
     base64UrlToBytes,
@@ -20,12 +20,14 @@ import {
 type RawQrMatrix = Array<Array<boolean | number>>;
 type Mode = 'send' | 'receive';
 type PayloadKind = 'text' | 'file';
+const SCAN_INTERVAL_MS = 50;
+const PLACEHOLDER_QR_PAYLOAD = 'LocalDrop';
+const RECEIVER_FAILURE_LIMIT = 3;
+const INDIUM_DIALOGS_MODULE = '/apps/indium/dist/components/dialogs.js';
 
 interface TransferFrame {
     payload: string;
     label: string;
-    detail: string;
-    kind: string;
     ecc: QrEcc;
 }
 
@@ -75,13 +77,13 @@ class LocalDropApp {
     private readonly frameKind: HTMLElement;
     private readonly transferSize: HTMLElement;
     private readonly prevBtn: HTMLButtonElement;
+    private readonly fullscreenBtn: HTMLButtonElement;
     private readonly playBtn: HTMLButtonElement;
     private readonly nextBtn: HTMLButtonElement;
     private readonly runtimeStatus: HTMLElement;
     private readonly video: HTMLVideoElement;
+    private readonly videoFrame: HTMLElement;
     private readonly scanCanvas: HTMLCanvasElement;
-    private readonly startCameraBtn: HTMLButtonElement;
-    private readonly stopCameraBtn: HTMLButtonElement;
     private readonly receiveTransfer: HTMLElement;
     private readonly receiveProgress: HTMLElement;
     private readonly receiveStatus: HTMLElement;
@@ -97,12 +99,19 @@ class LocalDropApp {
     private frames: TransferFrame[] = [];
     private frameIndex = 0;
     private playTimer = 0;
+    private transferClockTimer = 0;
     private isPlaying = false;
+    private hasPlayedOnce = false;
+    private transferStartedAt = 0;
     private prepareSequence = 0;
     private textInputTimer = 0;
     private scanStream: MediaStream | null = null;
+    private scanInterval = 0;
     private scanActive = false;
     private scanBusy = false;
+    private receiverFailureCount = 0;
+    private receiverErrorDialogOpen = false;
+    private fallbackFullscreen = false;
     private nativeDetector: NativeBarcodeDetector | null = null;
     private lastRawScan = '';
     private objectUrl: string | null = null;
@@ -130,13 +139,13 @@ class LocalDropApp {
         this.frameKind = must(root, '[data-bb-frame-kind]', HTMLElement);
         this.transferSize = must(root, '[data-bb-transfer-size]', HTMLElement);
         this.prevBtn = must(root, '[data-bb-prev]', HTMLButtonElement);
+        this.fullscreenBtn = must(root, '[data-bb-fullscreen]', HTMLButtonElement);
         this.playBtn = must(root, '[data-bb-play]', HTMLButtonElement);
         this.nextBtn = must(root, '[data-bb-next]', HTMLButtonElement);
         this.runtimeStatus = must(root, '[data-bb-runtime-status]', HTMLElement);
         this.video = must(root, '[data-bb-video]', HTMLVideoElement);
+        this.videoFrame = must(root, '.bb-video-frame', HTMLElement);
         this.scanCanvas = must(root, '[data-bb-scan-canvas]', HTMLCanvasElement);
-        this.startCameraBtn = must(root, '[data-bb-start-camera]', HTMLButtonElement);
-        this.stopCameraBtn = must(root, '[data-bb-stop-camera]', HTMLButtonElement);
         this.receiveTransfer = must(root, '[data-bb-receive-transfer]', HTMLElement);
         this.receiveProgress = must(root, '[data-bb-receive-progress]', HTMLElement);
         this.receiveStatus = must(root, '[data-bb-receive-status]', HTMLElement);
@@ -162,11 +171,14 @@ class LocalDropApp {
         });
 
         this.contentToggle.addEventListener('click', () => {
-            this.payloadKind = this.payloadKind === 'text' ? 'file' : 'text';
+            const nextKind: PayloadKind = this.payloadKind === 'text' ? 'file' : 'text';
+            this.payloadKind = nextKind;
             this.syncKind();
-            if (this.payloadKind === 'text') {
+            if (nextKind === 'text') {
                 this.textInput.focus();
                 void this.prepareTransfer();
+            } else {
+                this.fileInput.click();
             }
         });
 
@@ -196,11 +208,17 @@ class LocalDropApp {
         });
 
         this.prevBtn.addEventListener('click', () => this.showFrame(this.frameIndex - 1, false));
+        this.fullscreenBtn.addEventListener('click', () => void this.toggleFullscreen());
         this.nextBtn.addEventListener('click', () => this.showFrame(this.frameIndex + 1, false));
         this.playBtn.addEventListener('click', () => this.togglePlayback());
 
-        this.startCameraBtn.addEventListener('click', () => void this.startCamera());
-        this.stopCameraBtn.addEventListener('click', () => this.stopCamera());
+        document.addEventListener('fullscreenchange', () => this.syncFullscreenState());
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && this.fallbackFullscreen) {
+                this.closeFallbackFullscreen();
+            }
+        });
+
         this.resetReceiverBtn.addEventListener('click', () => this.resetReceiver());
         this.copyBtn.addEventListener('click', () => void this.copyTextResult());
     }
@@ -211,6 +229,7 @@ class LocalDropApp {
 
         if (this.mode === 'receive') {
             this.stopPlayback();
+            void this.startCamera();
         } else {
             this.stopCamera();
         }
@@ -221,7 +240,7 @@ class LocalDropApp {
         this.fileField.hidden = this.payloadKind !== 'file';
         const isFile = this.payloadKind === 'file';
         this.contentToggle.setAttribute('aria-label', isFile ? 'Switch to text entry' : 'Switch to file upload');
-        this.contentToggleLabel.textContent = isFile ? 'Text' : 'Upload...';
+        this.contentToggleLabel.textContent = isFile ? 'Text' : 'Upload';
         this.contentToggleIcon.src = isFile
             ? '/apps/indium/assets/svg/cursor-text.svg'
             : '/apps/indium/assets/svg/paper-clip.svg';
@@ -244,7 +263,23 @@ class LocalDropApp {
         this.stopPlayback();
         this.frames = [];
         this.frameIndex = 0;
-        this.qrStage.hidden = true;
+        this.hasPlayedOnce = false;
+        this.transferStartedAt = 0;
+        this.showPlaceholderQr();
+    }
+
+    private showPlaceholderQr(): void {
+        this.qrStage.hidden = false;
+        this.qrStage.classList.add('bb-qr-stage--placeholder');
+        this.renderQr(PLACEHOLDER_QR_PAYLOAD, 'medium');
+        this.frameLabel.textContent = 'Frame 0 of 0';
+        this.frameKind.textContent = '';
+        this.transferSize.textContent = 'Transfer time: 0 min 0 sec';
+        this.prevBtn.disabled = true;
+        this.nextBtn.disabled = true;
+        this.fullscreenBtn.disabled = false;
+        this.playBtn.disabled = true;
+        this.playBtn.textContent = 'Begin';
     }
 
     private async prepareTransfer(): Promise<void> {
@@ -253,10 +288,16 @@ class LocalDropApp {
         try {
             let transfer: PreparedTransfer;
             if (this.payloadKind === 'text') {
+                if (!this.textInput.value.trim()) {
+                    this.runtimeStatus.textContent = 'Offline client';
+                    this.resetPreparedTransfer();
+                    return;
+                }
+
                 transfer = await createTextTransfer(this.textInput.value, this.receiveUrl());
             } else {
                 if (!this.selectedFile) {
-                    this.runtimeStatus.textContent = 'File required';
+                    this.runtimeStatus.textContent = 'Offline client';
                     this.resetPreparedTransfer();
                     return;
                 }
@@ -270,29 +311,16 @@ class LocalDropApp {
             this.frames = transfer.frames.map((payload, index) => ({
                 payload,
                 label: `Frame ${index + 1} of ${transfer.frames.length}`,
-                detail: this.describeFrame(index, transfer),
-                kind: index === 0 ? 'Header URL' : `Chunk ${index}`,
                 ecc: transfer.ecc
             }));
             this.qrStage.hidden = false;
+            this.qrStage.classList.remove('bb-qr-stage--placeholder');
             this.showFrame(0, false);
-            this.runtimeStatus.textContent = transfer.header.kind === 'text'
-                ? `Text ready - ${formatBytes(transfer.byteSize)}`
-                : `File ready - ${formatBytes(transfer.byteSize)}`;
+            this.runtimeStatus.textContent = this.preparedTransferStatus(transfer);
         } catch (error) {
             console.error('[LocalDrop] Prepare failed', error);
             this.runtimeStatus.textContent = 'Prepare failed';
         }
-    }
-
-    private describeFrame(index: number, transfer: PreparedTransfer): string {
-        if (index === 0) {
-            return transfer.header.kind === 'text'
-                ? 'Scan with another device to open the text.'
-                : 'Scan with another device to begin transfer.';
-        }
-
-        return `Chunk ${index} of ${transfer.header.count} - ${formatBytes(transfer.header.chunkSize)} target`;
     }
 
     private showFrame(nextIndex: number, play: boolean): void {
@@ -301,18 +329,22 @@ class LocalDropApp {
         this.frameIndex = clamp(nextIndex, 0, this.frames.length - 1);
         const frame = this.frames[this.frameIndex];
         this.renderQr(frame.payload, frame.ecc);
-        this.frameLabel.textContent = frame.label;
-        this.frameKind.textContent = frame.kind;
-        this.transferSize.textContent = frame.detail;
+        this.frameLabel.textContent = this.frameLabelText();
+        this.frameKind.textContent = '';
+        this.transferSize.textContent = this.transferTimeText();
         this.prevBtn.disabled = this.frameIndex === 0;
         this.nextBtn.disabled = this.frameIndex === this.frames.length - 1;
+        this.fullscreenBtn.disabled = false;
         this.isPlaying = play && this.frames.length > 1 && this.frameIndex < this.frames.length - 1;
         this.playBtn.disabled = this.frames.length <= 1;
-        this.playBtn.textContent = this.isPlaying ? 'Pause' : 'Begin';
+        this.playBtn.textContent = this.playbackButtonText();
 
         if (this.isPlaying) {
+            if (!this.transferStartedAt) this.transferStartedAt = Date.now();
+            this.startTransferClock();
             this.scheduleNextFrame();
         } else {
+            this.stopTransferClock();
             this.stopPlaybackTimer();
         }
     }
@@ -328,10 +360,9 @@ class LocalDropApp {
         if (!ctx) return;
 
         const size = matrix.length;
-        const canvasSize = 720;
-        const moduleSize = Math.floor(canvasSize / size);
-        const drawSize = moduleSize * size;
-        const offset = Math.floor((canvasSize - drawSize) / 2);
+        const targetSize = 720;
+        const moduleSize = Math.max(1, Math.floor(targetSize / size));
+        const canvasSize = moduleSize * size;
 
         this.qrCanvas.width = canvasSize;
         this.qrCanvas.height = canvasSize;
@@ -343,10 +374,20 @@ class LocalDropApp {
         for (let y = 0; y < size; y++) {
             for (let x = 0; x < size; x++) {
                 if (matrix[y][x]) {
-                    ctx.fillRect(offset + x * moduleSize, offset + y * moduleSize, moduleSize, moduleSize);
+                    ctx.fillRect(x * moduleSize, y * moduleSize, moduleSize, moduleSize);
                 }
             }
         }
+    }
+
+    private preparedTransferStatus(transfer: PreparedTransfer): string {
+        if (transfer.header.kind === 'file' && transfer.frames.length > 20) {
+            return `Large transfer - ${transfer.frames.length} QR frames. For this size, Bluetooth or another OS-level file transfer is recommended.`;
+        }
+
+        return transfer.header.kind === 'text'
+            ? `Text ready - ${formatBytes(transfer.byteSize)}`
+            : `File ready - ${formatBytes(transfer.byteSize)}`;
     }
 
     private togglePlayback(): void {
@@ -354,11 +395,66 @@ class LocalDropApp {
 
         if (this.isPlaying) {
             this.stopPlayback();
-            this.playBtn.textContent = 'Begin';
+            this.playBtn.textContent = this.playbackButtonText();
+            this.transferSize.textContent = this.transferTimeText();
             return;
         }
 
+        this.transferStartedAt = Date.now();
         this.showFrame(this.frameIndex === 0 || this.frameIndex === this.frames.length - 1 ? 1 : this.frameIndex, true);
+    }
+
+    private async toggleFullscreen(): Promise<void> {
+        if (document.fullscreenElement === this.qrStage || this.fallbackFullscreen) {
+            await this.exitFullscreen();
+            return;
+        }
+
+        if (this.qrStage.requestFullscreen) {
+            try {
+                await this.qrStage.requestFullscreen();
+                this.syncFullscreenState();
+                return;
+            } catch (error) {
+                console.debug('[LocalDrop] Native fullscreen unavailable', error);
+            }
+        }
+
+        this.openFallbackFullscreen();
+    }
+
+    private async exitFullscreen(): Promise<void> {
+        if (document.fullscreenElement === this.qrStage && document.exitFullscreen) {
+            await document.exitFullscreen();
+            return;
+        }
+
+        this.closeFallbackFullscreen();
+    }
+
+    private openFallbackFullscreen(): void {
+        this.fallbackFullscreen = true;
+        this.qrStage.classList.add('bb-qr-stage--fullscreen');
+        document.body.classList.add('bb-fullscreen-lock');
+        this.syncFullscreenState();
+    }
+
+    private closeFallbackFullscreen(): void {
+        this.fallbackFullscreen = false;
+        this.qrStage.classList.remove('bb-qr-stage--fullscreen');
+        document.body.classList.remove('bb-fullscreen-lock');
+        this.syncFullscreenState();
+    }
+
+    private syncFullscreenState(): void {
+        const active = document.fullscreenElement === this.qrStage || this.fallbackFullscreen;
+        if (!active && this.fallbackFullscreen) {
+            this.fallbackFullscreen = false;
+            this.qrStage.classList.remove('bb-qr-stage--fullscreen');
+            document.body.classList.remove('bb-fullscreen-lock');
+        }
+        this.fullscreenBtn.textContent = active ? 'Exit' : 'Fullscreen';
+        this.fullscreenBtn.setAttribute('aria-label', active ? 'Exit fullscreen QR view' : 'Open fullscreen QR view');
     }
 
     private scheduleNextFrame(): void {
@@ -367,19 +463,65 @@ class LocalDropApp {
 
         this.playTimer = window.setTimeout(() => {
             const nextIndex = this.frameIndex + 1;
+            if (nextIndex >= this.frames.length - 1) {
+                this.hasPlayedOnce = true;
+            }
             this.showFrame(nextIndex, nextIndex < this.frames.length - 1);
         }, FRAME_INTERVAL_MS);
     }
 
     private stopPlayback(): void {
         this.isPlaying = false;
+        this.stopTransferClock();
         this.stopPlaybackTimer();
+    }
+
+    private frameLabelText(): string {
+        return `Frame ${this.frameIndex + 1} of ${this.frames.length}`;
+    }
+
+    private playbackButtonText(): string {
+        if (this.isPlaying) return 'Pause';
+        return this.hasPlayedOnce ? 'Restart' : 'Begin';
+    }
+
+    private transferTimeText(): string {
+        const remainingFrames = Math.max(0, this.frames.length - this.frameIndex - 1);
+        const estimatedTotalMs = Math.max(0, (this.frames.length - 1) * FRAME_INTERVAL_MS);
+        const elapsedMs = this.transferStartedAt ? Math.max(0, Date.now() - this.transferStartedAt) : 0;
+        const remainingMs = this.isPlaying
+            ? Math.max(0, estimatedTotalMs - elapsedMs)
+            : remainingFrames * FRAME_INTERVAL_MS;
+
+        return `Transfer time: ${this.formatDuration(remainingMs)}`;
+    }
+
+    private formatDuration(milliseconds: number): string {
+        const totalSeconds = Math.ceil(milliseconds / 1000);
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${minutes} min ${seconds} sec`;
     }
 
     private stopPlaybackTimer(): void {
         if (this.playTimer) {
             window.clearTimeout(this.playTimer);
             this.playTimer = 0;
+        }
+    }
+
+    private startTransferClock(): void {
+        if (this.transferClockTimer) return;
+
+        this.transferClockTimer = window.setInterval(() => {
+            this.transferSize.textContent = this.transferTimeText();
+        }, 250);
+    }
+
+    private stopTransferClock(): void {
+        if (this.transferClockTimer) {
+            window.clearInterval(this.transferClockTimer);
+            this.transferClockTimer = 0;
         }
     }
 
@@ -411,14 +553,14 @@ class LocalDropApp {
             }
 
             this.scanActive = true;
-            this.startCameraBtn.disabled = true;
-            this.stopCameraBtn.disabled = false;
-            this.receiveStatus.textContent = this.receiveHeader ? 'Scanning chunks.' : 'Scanning for header.';
+            this.receiveStatus.textContent = this.receiveHeader
+                ? 'Connection established. Select Begin on the other device.'
+                : 'Scanning for connection...';
             this.runtimeStatus.textContent = this.nativeDetector ? 'Native scanner' : 'Canvas scanner';
-            this.queueScan();
+            this.startScanLoop();
         } catch (error) {
             console.error('[LocalDrop] Camera failed', error);
-            this.receiveStatus.textContent = 'Camera unavailable. Use HTTPS or allow camera access.';
+            this.receiveStatus.textContent = 'Camera unavailable. Ensure one is available + allow camera access.';
             this.stopCamera();
         }
     }
@@ -426,8 +568,7 @@ class LocalDropApp {
     private stopCamera(): void {
         this.scanActive = false;
         this.scanBusy = false;
-        this.startCameraBtn.disabled = false;
-        this.stopCameraBtn.disabled = true;
+        this.stopScanLoop();
 
         if (this.scanStream) {
             for (const track of this.scanStream.getTracks()) {
@@ -439,42 +580,40 @@ class LocalDropApp {
         this.video.srcObject = null;
     }
 
-    private queueScan(): void {
-        if (!this.scanActive) return;
+    private startScanLoop(): void {
+        this.stopScanLoop();
+        this.scanInterval = window.setInterval(() => void this.scanTick(), SCAN_INTERVAL_MS);
+        void this.scanTick();
+    }
 
-        const run = () => {
-            if (!this.scanActive || this.scanBusy) {
-                this.queueScan();
-                return;
-            }
+    private stopScanLoop(): void {
+        if (this.scanInterval) {
+            window.clearInterval(this.scanInterval);
+            this.scanInterval = 0;
+        }
+    }
 
-            this.scanBusy = true;
-            void this.scanOnce()
-                .catch((error) => console.debug('[LocalDrop] Scan miss', error))
-                .finally(() => {
-                    this.scanBusy = false;
-                    this.queueScan();
-                });
-        };
+    private async scanTick(): Promise<void> {
+        if (!this.scanActive || this.scanBusy) return;
 
-        if (this.video.requestVideoFrameCallback) {
-            this.video.requestVideoFrameCallback(run);
-        } else {
-            window.requestAnimationFrame(run);
+        this.scanBusy = true;
+        try {
+            await this.scanOnce();
+        } catch (error) {
+            console.debug('[LocalDrop] Scan miss', error);
+        } finally {
+            this.scanBusy = false;
         }
     }
 
     private async scanOnce(): Promise<void> {
         if (!this.video.videoWidth || !this.video.videoHeight) return;
 
-        let raw = '';
-        if (this.nativeDetector) {
+        let raw = this.scanViaCanvas();
+
+        if (!raw && this.nativeDetector) {
             const results = await this.nativeDetector.detect(this.video);
             raw = results[0]?.rawValue ?? '';
-        }
-
-        if (!raw) {
-            raw = this.scanViaCanvas();
         }
 
         if (!raw || raw === this.lastRawScan) return;
@@ -484,24 +623,41 @@ class LocalDropApp {
     }
 
     private scanViaCanvas(): string {
-        const sourceSize = Math.min(this.video.videoWidth, this.video.videoHeight);
-        const sx = Math.floor((this.video.videoWidth - sourceSize) / 2);
-        const sy = Math.floor((this.video.videoHeight - sourceSize) / 2);
-        const targetSize = 720;
         const ctx = this.scanCanvas.getContext('2d', { willReadFrequently: true });
         if (!ctx) return '';
+
+        const width = this.video.videoWidth;
+        const height = this.video.videoHeight;
+        if (this.scanCanvas.width !== width) this.scanCanvas.width = width;
+        if (this.scanCanvas.height !== height) this.scanCanvas.height = height;
+
+        ctx.drawImage(this.video, 0, 0, width, height);
+
+        try {
+            const image = ctx.getImageData(0, 0, width, height);
+            const code = jsQR(image.data, width, height, { inversionAttempts: 'dontInvert' });
+            if (code?.data) return code.data;
+        } catch {
+            // Try the center crop below before giving up.
+        }
+
+        return this.scanCenterCrop(ctx, width, height);
+    }
+
+    private scanCenterCrop(ctx: CanvasRenderingContext2D, width: number, height: number): string {
+        const sourceSize = Math.min(width, height);
+        const sx = Math.floor((width - sourceSize) / 2);
+        const sy = Math.floor((height - sourceSize) / 2);
+        const targetSize = 720;
 
         this.scanCanvas.width = targetSize;
         this.scanCanvas.height = targetSize;
         ctx.drawImage(this.video, sx, sy, sourceSize, sourceSize, 0, 0, targetSize, targetSize);
 
-        const image = ctx.getImageData(0, 0, targetSize, targetSize);
         try {
-            return decodeQR({
-                width: image.width,
-                height: image.height,
-                data: image.data
-            });
+            const image = ctx.getImageData(0, 0, targetSize, targetSize);
+            const code = jsQR(image.data, targetSize, targetSize, { inversionAttempts: 'dontInvert' });
+            return code?.data ?? '';
         } catch {
             return '';
         }
@@ -510,28 +666,31 @@ class LocalDropApp {
     private async handleRawFrame(raw: string): Promise<void> {
         const receivedHeader = await parseHeaderUrl(raw);
         if (receivedHeader) {
+            this.clearReceiverFailure();
             this.applyReceivedHeader(receivedHeader.header, receivedHeader.key);
             return;
         }
 
         if (!this.receiveHeader || !this.receiveKey) {
-            this.receiveStatus.textContent = 'Scan the header URL first.';
+            this.receiveStatus.textContent = 'Scan the connection QR first.';
+            this.noteReceiverFailure('Scan the connection QR first.');
             return;
         }
 
         const chunk = await parseChunkFrame(raw, this.receiveKey);
         if (!chunk) {
-            this.receiveStatus.textContent = 'Unsupported QR.';
+            this.noteReceiverFailure('Unsupported QR. Keep the QR inside the blue frame.');
             return;
         }
 
         if (chunk.index > this.receiveHeader.count) {
-            this.receiveStatus.textContent = `Unexpected chunk ${chunk.index}.`;
+            this.noteReceiverFailure(`Unexpected chunk ${chunk.index}.`);
             return;
         }
 
+        this.clearReceiverFailure();
         this.receiveChunks.set(chunk.index, chunk.data);
-        this.receiveStatus.textContent = `Chunk ${chunk.index} received.`;
+        this.receiveStatus.textContent = `Receiving file. Chunk ${chunk.index} received.`;
         this.syncReceiveProgress();
         this.tryCompleteFile();
     }
@@ -553,22 +712,23 @@ class LocalDropApp {
         if (header.kind === 'text') {
             const bytes = base64UrlToBytes(header.textPayload ?? '');
             if (bytes.length !== header.size || crc32Hex(bytes) !== header.crcHex) {
-                this.receiveStatus.textContent = 'Text validation failed.';
+                this.noteReceiverFailure('Text validation failed.');
                 return;
             }
 
+            this.clearReceiverFailure();
             this.showTextResult(decodeString(bytes), header.size, header.crcHex);
             return;
         }
 
-        this.receiveStatus.textContent = `Header received for ${header.filename}.`;
+        this.receiveStatus.textContent = 'Connection established. Select Begin on the other device.';
         this.syncReceiveProgress();
     }
 
     private syncReceiveProgress(): void {
         if (!this.receiveHeader) {
             this.receiveTransfer.textContent = 'Waiting';
-            this.receiveProgress.textContent = '0 / 0';
+            this.receiveProgress.textContent = this.receiveTransferTimeText();
             return;
         }
 
@@ -577,7 +737,7 @@ class LocalDropApp {
             ? `${this.receiveHeader.filename} - ${formatBytes(this.receiveHeader.size)}`
             : `Text - ${formatBytes(this.receiveHeader.size)}`;
         this.receiveTransfer.textContent = label;
-        this.receiveProgress.textContent = `${this.receiveChunks.size} / ${this.receiveHeader.count}`;
+        this.receiveProgress.textContent = this.receiveTransferTimeText();
 
         if (missing.length && this.receiveChunks.size > 0) {
             this.receiveStatus.textContent = `Missing chunks: ${missing.join(', ')}`;
@@ -591,16 +751,17 @@ class LocalDropApp {
         if (!assembled) return;
 
         if (assembled.length !== this.receiveHeader.size) {
-            this.receiveStatus.textContent = `Size mismatch: ${assembled.length} of ${this.receiveHeader.size}.`;
+            this.noteReceiverFailure(`Size mismatch: ${assembled.length} of ${this.receiveHeader.size}.`);
             return;
         }
 
         const actualCrc = crc32Hex(assembled);
         if (actualCrc !== this.receiveHeader.crcHex) {
-            this.receiveStatus.textContent = `CRC mismatch: ${actualCrc} expected ${this.receiveHeader.crcHex}.`;
+            this.noteReceiverFailure(`CRC mismatch: ${actualCrc} expected ${this.receiveHeader.crcHex}.`);
             return;
         }
 
+        this.clearReceiverFailure();
         this.showFileResult(assembled, this.receiveHeader.filename ?? 'localdrop-file', actualCrc);
     }
 
@@ -612,8 +773,8 @@ class LocalDropApp {
         this.copyBtn.hidden = false;
         this.downloadLink.hidden = true;
         this.receiveTransfer.textContent = `Text - ${formatBytes(size)}`;
-        this.receiveProgress.textContent = '1 / 1';
-        this.receiveStatus.textContent = `Text validated. CRC ${crcHex}.`;
+        this.receiveProgress.textContent = this.receiveTransferTimeText(0);
+        this.receiveStatus.textContent = `Text received and validated.`;
     }
 
     private showFileResult(bytes: Uint8Array, filename: string, crcHex: string): void {
@@ -627,7 +788,7 @@ class LocalDropApp {
         this.copyBtn.hidden = true;
         this.resultText.hidden = true;
         this.resultPanel.hidden = false;
-        this.receiveStatus.textContent = `File validated. CRC ${crcHex}.`;
+        this.receiveStatus.textContent = `File received and validated.`;
     }
 
     private async copyTextResult(): Promise<void> {
@@ -646,14 +807,60 @@ class LocalDropApp {
         this.receiveKey = null;
         this.receiveChunks.clear();
         this.lastRawScan = '';
+        this.clearReceiverFailure();
         this.resultPanel.hidden = true;
         this.resultText.value = '';
         this.downloadLink.hidden = true;
         this.copyBtn.hidden = true;
         this.resultText.hidden = true;
         this.receiveTransfer.textContent = 'Waiting';
-        this.receiveProgress.textContent = '0 / 0';
+        this.receiveProgress.textContent = this.receiveTransferTimeText();
         if (clearStatus) this.receiveStatus.textContent = this.scanActive ? 'Scanning.' : 'Camera idle.';
+    }
+
+    private noteReceiverFailure(message: string): void {
+        this.receiverFailureCount++;
+        this.videoFrame.classList.add('bb-video-frame--warning');
+        this.receiveStatus.textContent = message;
+
+        if (this.receiverFailureCount >= RECEIVER_FAILURE_LIMIT) {
+            this.resetReceiver(false);
+            this.receiveStatus.textContent = 'Transfer reset. Scan the connection QR again.';
+            void this.showReceiverFailureDialog();
+        }
+    }
+
+    private clearReceiverFailure(): void {
+        this.receiverFailureCount = 0;
+        this.videoFrame.classList.remove('bb-video-frame--warning');
+    }
+
+    private async showReceiverFailureDialog(): Promise<void> {
+        if (this.receiverErrorDialogOpen) return;
+
+        this.receiverErrorDialogOpen = true;
+        try {
+            const dialogModule = await import(INDIUM_DIALOGS_MODULE);
+            if (typeof dialogModule.showAlert === 'function') {
+                await dialogModule.showAlert({
+                    title: 'Transfer interrupted',
+                    message: 'LocalDrop reset the receiver after repeated scan failures. Hold both devices steady, align the QR inside the blue borders, avoid glare, and use Fullscreen on the sending device before replaying.'
+                });
+            } else {
+                window.alert('Transfer interrupted. Hold both devices steady, align the QR inside the blue borders, avoid glare, and use Fullscreen on the sending device before replaying.');
+            }
+        } catch {
+            window.alert('Transfer interrupted. Hold both devices steady, align the QR inside the blue borders, avoid glare, and use Fullscreen on the sending device before replaying.');
+        } finally {
+            this.receiverErrorDialogOpen = false;
+        }
+    }
+
+    private receiveTransferTimeText(remainingFrames?: number): string {
+        const frames = remainingFrames ?? (this.receiveHeader
+            ? Math.max(0, this.receiveHeader.count - this.receiveChunks.size)
+            : 0);
+        return `Transfer time: ${this.formatDuration(frames * FRAME_INTERVAL_MS)}`;
     }
 
     private async loadHeaderFromCurrentUrl(): Promise<void> {

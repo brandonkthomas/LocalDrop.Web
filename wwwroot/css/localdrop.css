@@ -15,6 +15,7 @@
 
 .bb-card {
     width: min(920px, 100%);
+    border: 1px solid var(--wa-color-border-strong);
     border-radius: 18px;
 }
 
@@ -111,15 +112,16 @@
 }
 
 .bb-input-surface {
-    min-height: 260px;
+    height: 240px;
+    min-height: 240px;
 }
 
 .bb-field textarea,
 .bb-dropzone,
 .bb-result textarea {
     width: 100%;
-    height: 260px;
-    min-height: 260px;
+    height: 240px;
+    min-height: 240px;
     border: 1px solid var(--wa-color-border-strong);
     border-radius: 14px;
     background: var(--wa-color-surface-input);
@@ -156,15 +158,25 @@
 }
 
 .bb-dropzone {
-    height: 260px;
-    min-height: 260px;
+    height: 240px;
+    min-height: 240px;
     padding: 1.15rem;
     cursor: pointer;
     border-style: dashed;
-    display: grid;
-    place-items: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     text-align: center;
     transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.bb-dropzone__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    max-width: 100%;
 }
 
 .bb-dropzone__title {
@@ -174,9 +186,12 @@
     font-weight: 600;
 }
 
+.bb-dropzone__mobile {
+    display: none;
+}
+
 .bb-dropzone__meta {
     display: block;
-    margin-top: 0.35rem;
     color: var(--wa-color-text-dim);
     overflow-wrap: anywhere;
 }
@@ -199,8 +214,7 @@
     filter: var(--wa-icon-filter);
 }
 
-.bb-player-controls,
-.bb-receive-actions {
+.bb-player-controls {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -215,13 +229,66 @@
     gap: 0.85rem;
 }
 
+.bb-qr-stage:fullscreen,
+.bb-qr-stage--fullscreen {
+    width: 100vw;
+    height: 100vh;
+    padding: clamp(0.75rem, 2.5vmin, 2rem);
+    box-sizing: border-box;
+    justify-content: center;
+    background: #ffffff;
+    color: #111827;
+    z-index: 10000;
+}
+
+.bb-qr-stage--fullscreen {
+    position: fixed;
+    inset: 0;
+}
+
+.bb-qr-stage:fullscreen .bb-qr-wrap,
+.bb-qr-stage--fullscreen .bb-qr-wrap {
+    width: min(96vw, calc(100vh - 8rem));
+    max-width: none;
+    border-color: #0092ff;
+}
+
+.bb-qr-stage:fullscreen .bb-transfer-meta,
+.bb-qr-stage--fullscreen .bb-transfer-meta {
+    width: min(96vw, calc(100vh - 8rem));
+    color: #374151;
+}
+
+.bb-qr-stage:fullscreen .bb-player-controls,
+.bb-qr-stage--fullscreen .bb-player-controls {
+    color: #111827;
+}
+
+.bb-qr-stage:fullscreen .wa-btn,
+.bb-qr-stage--fullscreen .wa-btn {
+    background: #f9fafb;
+    border-color: #d1d5db;
+    color: #111827;
+}
+
+.bb-qr-stage:fullscreen .wa-btn--primary,
+.bb-qr-stage--fullscreen .wa-btn--primary {
+    background: #111827;
+    border-color: #111827;
+    color: #ffffff;
+}
+
+.bb-fullscreen-lock {
+    overflow: hidden;
+}
+
 .bb-qr-wrap {
     width: min(100%, min(62vh, 620px));
     aspect-ratio: 1;
-    padding: 0.65rem;
+    padding: 0.5rem;
     display: grid;
     place-items: center;
-    border: 1px solid var(--wa-color-border-strong);
+    border: 5px solid #0092ff;
     border-radius: 14px;
     background: #ffffff;
     box-sizing: border-box;
@@ -231,6 +298,25 @@
     width: 100%;
     height: 100%;
     image-rendering: pixelated;
+}
+
+.bb-qr-stage--placeholder .bb-qr-wrap {
+    border-color: var(--wa-color-border-strong);
+    background: var(--wa-color-surface-input);
+}
+
+.bb-qr-stage--placeholder .bb-qr-wrap canvas {
+    filter: blur(15px) grayscale(1);
+    opacity: 0.32;
+}
+
+.bb-qr-stage--placeholder .bb-transfer-meta {
+    color: var(--wa-color-text-muted);
+}
+
+.bb-qr-stage--placeholder .bb-player-controls {
+    opacity: 0.45;
+    pointer-events: none;
 }
 
 .bb-transfer-meta {
@@ -266,11 +352,18 @@
 }
 
 .bb-video-frame {
-    min-height: 360px;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    min-height: 0;
     overflow: hidden;
     display: grid;
     place-items: center;
     background: light-dark(#101418, #050506);
+}
+
+.bb-video-frame--warning {
+    border-color: #f59e0b;
+    box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.35);
 }
 
 .bb-video-frame video {
@@ -337,7 +430,8 @@
 
 @media (max-width: 760px) {
     .bb-page {
-        padding: 5rem 1rem 2rem;
+        padding: 6rem 1rem 2rem;
+        place-items: start;
     }
 
     .bb-card {
@@ -359,15 +453,28 @@
         min-height: 240px;
     }
 
+    .bb-dropzone__desktop {
+        display: none;
+    }
+
+    .bb-dropzone__mobile {
+        display: inline;
+    }
+
     .bb-receiver-grid {
         grid-template-columns: 1fr;
     }
 
     .bb-video-frame {
-        min-height: min(62vh, 360px);
+        height: auto;
+        border: 5px solid #0092ff;
     }
 
     .bb-transfer-meta {
         font-size: 0.84rem;
+    }
+    
+    .bb-input-panel .bb-content-toggle {
+        bottom: 1rem;
     }
 }

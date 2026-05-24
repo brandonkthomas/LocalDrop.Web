@@ -37,8 +37,13 @@
                             <div class="bb-field bb-field--file bb-input-surface" data-bb-file-field hidden>
                                 <input data-bb-file-input id="bb-file-input" type="file" hidden />
                                 <label class="bb-dropzone" for="bb-file-input" data-bb-dropzone>
-                                    <span class="bb-dropzone__title">Choose file</span>
-                                    <span class="bb-dropzone__meta" data-bb-file-meta>No file selected</span>
+                                    <span class="bb-dropzone__inner">
+                                        <span class="bb-dropzone__title">
+                                            <span class="bb-dropzone__desktop">Drag &amp; drop or click to upload</span>
+                                            <span class="bb-dropzone__mobile" aria-hidden="true">Tap to Upload</span>
+                                        </span>
+                                        <span class="bb-dropzone__meta" data-bb-file-meta>No file selected</span>
+                                    </span>
                                 </label>
                             </div>
 
@@ -50,7 +55,7 @@
 
                     </div>
 
-                    <div class="bb-qr-stage" data-bb-qr-stage hidden>
+                    <div class="bb-qr-stage bb-qr-stage--placeholder" data-bb-qr-stage>
                         <div class="bb-qr-wrap">
                             <canvas data-bb-qr-canvas width="720" height="720" aria-label="LocalDrop QR code"></canvas>
                         </div>
@@ -67,6 +72,7 @@
                             <button type="button" class="wa-btn wa-btn--icon" data-bb-prev aria-label="Previous frame" title="Previous frame">
                                 <span aria-hidden="true">&lt;</span>
                             </button>
+                            <button type="button" class="wa-btn" data-bb-fullscreen>Fullscreen</button>
                             <button type="button" class="wa-btn wa-btn--primary" data-bb-play>Begin</button>
                             <button type="button" class="wa-btn wa-btn--icon" data-bb-next aria-label="Next frame" title="Next frame">
                                 <span aria-hidden="true">&gt;</span>
@@ -83,18 +89,13 @@
                         </div>
 
                         <div class="bb-receive-panel">
-                            <div class="bb-receive-actions">
-                                <button type="button" class="wa-btn wa-btn--primary" data-bb-start-camera>Start Camera</button>
-                                <button type="button" class="wa-btn" data-bb-stop-camera disabled>Stop</button>
-                            </div>
-
                             <dl class="bb-stats">
                                 <div>
                                     <dt>Transfer</dt>
                                     <dd data-bb-receive-transfer>Waiting</dd>
                                 </div>
                                 <div>
-                                    <dt>Progress</dt>
+                                    <dt>Transfer Time</dt>
                                     <dd data-bb-receive-progress>0 / 0</dd>
                                 </div>
                             </dl>

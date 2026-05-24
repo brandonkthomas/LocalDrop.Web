@@ -29,8 +29,8 @@ export interface ReceivedHeader {
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 const BYTE_STRING_CHUNK = 0x8000;
-export const FAST_CHUNK_SIZE = 1800;
-export const FRAME_INTERVAL_MS = 600;
+export const FAST_CHUNK_SIZE = 768;
+export const FRAME_INTERVAL_MS = 200;
 
 export function bytesToBase64Url(bytes: Uint8Array): string {
     let binary = '';
@@ -96,7 +96,7 @@ export async function createTextTransfer(text: string, receiveUrl: string): Prom
         header,
         byteSize: bytes.length,
         crcHex,
-        ecc: 'low'
+        ecc: 'medium'
     };
 }
 
@@ -132,7 +132,7 @@ export async function createFileTransfer(
         header,
         byteSize: fileBytes.length,
         crcHex,
-        ecc: 'low'
+        ecc: 'medium'
     };
 }
 

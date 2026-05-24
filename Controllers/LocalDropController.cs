@@ -15,6 +15,7 @@ public class LocalDropController : Controller
     {
         ViewData["Title"] = "LocalDrop";
         ViewData["IsAppPage"] = true;
+        ViewData["CanPinchToZoom"] = true;
 
         return View("~/Apps/LocalDrop/Views/Index.cshtml");
     }
