@@ -5,7 +5,7 @@
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <AddRazorSupportForMvc>true</AddRazorSupportForMvc>
-        <StaticWebAssetBasePath>apps/blinkbridge</StaticWebAssetBasePath>
+        <StaticWebAssetBasePath>apps/localdrop</StaticWebAssetBasePath>
 
         <IndiumProjectPath Condition="'$(IndiumProjectPath)' == '' and Exists('$(MSBuildProjectDirectory)/../../Libraries/Indium/Indium.csproj')">$(MSBuildProjectDirectory)/../../Libraries/Indium/Indium.csproj</IndiumProjectPath>
         <IndiumProjectPath Condition="'$(IndiumProjectPath)' == ''">$(MSBuildProjectDirectory)/../Submodules/Indium/Indium.csproj</IndiumProjectPath>
@@ -30,9 +30,9 @@
 
     <Target Name="BuildLocalDropClient" BeforeTargets="Build">
         <PropertyGroup>
-            <_LocalDropEntryTs>$(MSBuildProjectDirectory)/wwwroot/ts/blinkbridge.ts</_LocalDropEntryTs>
+            <_LocalDropEntryTs>$(MSBuildProjectDirectory)/wwwroot/ts/localdrop.ts</_LocalDropEntryTs>
             <_LocalDropOutDir>$(MSBuildProjectDirectory)/wwwroot/dist/js</_LocalDropOutDir>
-            <_LocalDropOutFile>$(_LocalDropOutDir)/blinkbridge.js</_LocalDropOutFile>
+            <_LocalDropOutFile>$(_LocalDropOutDir)/localdrop.js</_LocalDropOutFile>
             <_EsbuildCliLocal>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/node_modules/esbuild/bin/esbuild'))</_EsbuildCliLocal>
             <_EsbuildCliPortfolio>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/../Portfolio/node_modules/esbuild/bin/esbuild'))</_EsbuildCliPortfolio>
             <_EsbuildCli Condition="'$(EsbuildCli)' != ''">$(EsbuildCli)</_EsbuildCli>

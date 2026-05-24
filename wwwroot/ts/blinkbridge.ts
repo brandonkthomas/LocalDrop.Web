@@ -601,7 +601,7 @@ class LocalDropApp {
             return;
         }
 
-        this.showFileResult(assembled, this.receiveHeader.filename ?? 'blinkbridge-file', actualCrc);
+        this.showFileResult(assembled, this.receiveHeader.filename ?? 'localdrop-file', actualCrc);
     }
 
     private showTextResult(text: string, size: number, crcHex: string): void {
@@ -667,7 +667,7 @@ class LocalDropApp {
     }
 
     private receiveUrl(): string {
-        return new URL('/blinkbridge', window.location.origin).toString();
+        return new URL('/localdrop', window.location.origin).toString();
     }
 
     private clearObjectUrl(): void {

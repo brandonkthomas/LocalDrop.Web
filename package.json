@@ -1,9 +1,9 @@
 {
-  "name": "blinkbridge-web-client",
+  "name": "localdrop-web-client",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild wwwroot/ts/blinkbridge.ts --bundle --format=esm --outfile=wwwroot/dist/js/blinkbridge.js --log-level=warning",
+    "build": "esbuild wwwroot/ts/localdrop.ts --bundle --format=esm --outfile=wwwroot/dist/js/localdrop.js --log-level=warning",
     "test:protocol": "mkdir -p .tmp && esbuild tests/protocol.test.ts --bundle --platform=node --format=esm --outfile=.tmp/protocol.test.mjs --log-level=warning && node .tmp/protocol.test.mjs"
   },
   "dependencies": {

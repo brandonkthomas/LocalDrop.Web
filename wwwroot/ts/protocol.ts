@@ -106,7 +106,7 @@ export async function createFileTransfer(
     receiveUrl: string,
     chunkSize = FAST_CHUNK_SIZE
 ): Promise<PreparedTransfer> {
-    const safeFilename = filename.trim() || 'blinkbridge-file';
+    const safeFilename = filename.trim() || 'localdrop-file';
     const crcHex = crc32Hex(fileBytes);
     const count = Math.max(1, Math.ceil(fileBytes.length / chunkSize));
     const key = await createKey();

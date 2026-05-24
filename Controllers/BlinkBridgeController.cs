@@ -10,7 +10,7 @@ public class LocalDropController : Controller
     /// <summary>
     /// Display the LocalDrop app.
     /// </summary>
-    [HttpGet("/blinkbridge")]
+    [HttpGet("/localdrop")]
     public IActionResult Index()
     {
         ViewData["Title"] = "LocalDrop";

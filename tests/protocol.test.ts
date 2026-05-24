@@ -27,7 +27,7 @@ if (!globalThis.atob) {
     });
 }
 
-const receiveUrl = 'https://example.test/blinkbridge';
+const receiveUrl = 'https://example.test/localdrop';
 const text = 'LocalDrop text payload';
 const textTransfer = await createTextTransfer(text, receiveUrl);
 assert.equal(textTransfer.frames.length, 1);
