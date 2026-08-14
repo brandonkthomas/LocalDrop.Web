@@ -7,6 +7,8 @@ import {
     crc32Hex,
     encodeString,
     findMissingIndexes,
+    MAX_FILE_BYTES,
+    MAX_FILE_FRAMES,
     parseChunkFrame,
     parseHeaderUrl
 } from '../wwwroot/ts/protocol';
@@ -43,8 +45,11 @@ for (let i = 0; i < bytes.length; i++) {
 }
 
 const fileTransfer = await createFileTransfer(bytes, 'pipe|safe name.bin', receiveUrl, 700);
+const repeatedFileTransfer = await createFileTransfer(bytes, 'pipe|safe name.bin', receiveUrl, 700);
+assert.notEqual(fileTransfer.header.transferId, repeatedFileTransfer.header.transferId);
 const parsedFileHeader = await parseHeaderUrl(fileTransfer.frames[0]);
 assert.equal(parsedFileHeader?.header.kind, 'file');
+assert.equal(typeof parsedFileHeader?.header.transferId, 'string');
 assert.equal(parsedFileHeader?.header.filename, 'pipe|safe name.bin');
 assert.equal(parsedFileHeader?.header.count, 5);
 assert.equal(parsedFileHeader?.header.crcHex, crc32Hex(bytes));
@@ -72,3 +77,8 @@ const tamperedUrl = textTransfer.frames[0].replace(/h=[^&]+/, 'h=broken');
 assert.equal(await parseHeaderUrl(tamperedUrl), null);
 assert.equal(await parseChunkFrame('3.broken', parsedFileHeader.key), null);
 assert.equal(crc32Hex(encodeString('123456789')), 'CBF43926');
+assert.equal(assembleChunks(new Map(), MAX_FILE_FRAMES + 1), null);
+await assert.rejects(
+    () => createFileTransfer(new Uint8Array(MAX_FILE_BYTES + 1), 'too-large.bin', receiveUrl),
+    /larger than/
+);

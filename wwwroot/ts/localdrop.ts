@@ -10,6 +10,7 @@ import {
     findMissingIndexes,
     formatBytes,
     FRAME_INTERVAL_MS,
+    MAX_FILE_BYTES,
     parseChunkFrame,
     parseHeaderUrl,
     type PreparedTransfer,
@@ -248,6 +249,14 @@ class LocalDropApp {
     }
 
     private setSelectedFile(file: File | null): void {
+        if (file && file.size > MAX_FILE_BYTES) {
+            this.selectedFile = null;
+            this.fileInput.value = '';
+            this.fileMeta.textContent = `File is too large. Maximum size is ${formatBytes(MAX_FILE_BYTES)}.`;
+            this.resetPreparedTransfer();
+            return;
+        }
+
         this.selectedFile = file;
         if (!file) {
             this.fileMeta.textContent = 'No file selected';
@@ -688,6 +697,14 @@ class LocalDropApp {
             return;
         }
 
+        const expectedChunkSize = chunk.index === this.receiveHeader.count
+            ? this.receiveHeader.size - ((this.receiveHeader.count - 1) * this.receiveHeader.chunkSize)
+            : this.receiveHeader.chunkSize;
+        if (chunk.data.length !== expectedChunkSize) {
+            this.noteReceiverFailure(`Invalid size for chunk ${chunk.index}.`);
+            return;
+        }
+
         this.clearReceiverFailure();
         this.receiveChunks.set(chunk.index, chunk.data);
         this.receiveStatus.textContent = `Receiving file. Chunk ${chunk.index} received.`;
@@ -698,10 +715,13 @@ class LocalDropApp {
     private applyReceivedHeader(header: TransferHeader, key: CryptoKey): void {
         const isNewTransfer =
             !this.receiveHeader
+            || this.receiveHeader.transferId !== header.transferId
             || this.receiveHeader.crcHex !== header.crcHex
             || this.receiveHeader.size !== header.size
             || this.receiveHeader.filename !== header.filename
-            || this.receiveHeader.kind !== header.kind;
+            || this.receiveHeader.kind !== header.kind
+            || this.receiveHeader.count !== header.count
+            || this.receiveHeader.chunkSize !== header.chunkSize;
 
         if (isNewTransfer) {
             this.resetReceiver(false);

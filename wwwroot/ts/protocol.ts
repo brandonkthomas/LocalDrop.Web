@@ -4,6 +4,7 @@ export type QrEcc = 'low' | 'medium';
 
 export interface TransferHeader {
     v: 1;
+    transferId: string;
     kind: 'text' | 'file';
     size: number;
     crcHex: string;
@@ -31,6 +32,9 @@ const textDecoder = new TextDecoder();
 const BYTE_STRING_CHUNK = 0x8000;
 export const FAST_CHUNK_SIZE = 768;
 export const FRAME_INTERVAL_MS = 200;
+export const MAX_FILE_BYTES = 5 * 1024 * 1024;
+export const MAX_CHUNK_SIZE = 1024;
+export const MAX_FILE_FRAMES = Math.ceil(MAX_FILE_BYTES / FAST_CHUNK_SIZE);
 
 export function bytesToBase64Url(bytes: Uint8Array): string {
     let binary = '';
@@ -83,6 +87,7 @@ export async function createTextTransfer(text: string, receiveUrl: string): Prom
     const key = await createKey();
     const header: TransferHeader = {
         v: 1,
+        transferId: createTransferId(),
         kind: 'text',
         size: bytes.length,
         crcHex,
@@ -106,12 +111,23 @@ export async function createFileTransfer(
     receiveUrl: string,
     chunkSize = FAST_CHUNK_SIZE
 ): Promise<PreparedTransfer> {
+    if (fileBytes.byteLength > MAX_FILE_BYTES) {
+        throw new RangeError(`Files larger than ${formatBytes(MAX_FILE_BYTES)} are not supported.`);
+    }
+    if (!Number.isSafeInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK_SIZE) {
+        throw new RangeError(`Chunk size must be between 1 and ${MAX_CHUNK_SIZE} bytes.`);
+    }
+
     const safeFilename = filename.trim() || 'localdrop-file';
     const crcHex = crc32Hex(fileBytes);
     const count = Math.max(1, Math.ceil(fileBytes.length / chunkSize));
+    if (count > MAX_FILE_FRAMES) {
+        throw new RangeError(`Transfer requires more than ${MAX_FILE_FRAMES} QR frames.`);
+    }
     const key = await createKey();
     const header: TransferHeader = {
         v: 1,
+        transferId: createTransferId(),
         kind: 'file',
         filename: safeFilename,
         size: fileBytes.length,
@@ -177,6 +193,10 @@ export async function parseChunkFrame(raw: string, key: CryptoKey): Promise<{ in
 }
 
 export function findMissingIndexes(chunks: Map<number, Uint8Array>, count: number): number[] {
+    if (!isValidFileFrameCount(count)) {
+        throw new RangeError('Invalid LocalDrop frame count.');
+    }
+
     const missing: number[] = [];
     for (let i = 1; i <= count; i++) {
         if (!chunks.has(i)) missing.push(i);
@@ -185,6 +205,8 @@ export function findMissingIndexes(chunks: Map<number, Uint8Array>, count: numbe
 }
 
 export function assembleChunks(chunks: Map<number, Uint8Array>, count: number): Uint8Array | null {
+    if (!isValidFileFrameCount(count)) return null;
+
     const missing = findMissingIndexes(chunks, count);
     if (missing.length) return null;
 
@@ -222,6 +244,10 @@ async function createKey(): Promise<CryptoKey> {
         true,
         ['encrypt', 'decrypt']
     );
+}
+
+function createTransferId(): string {
+    return bytesToBase64Url(globalThis.crypto.getRandomValues(new Uint8Array(16)));
 }
 
 async function exportKey(key: CryptoKey): Promise<string> {
@@ -270,15 +296,26 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 function isValidHeader(header: TransferHeader): boolean {
     if (header?.v !== 1) return false;
+    if (typeof header.transferId !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(header.transferId)) return false;
     if (header.kind !== 'text' && header.kind !== 'file') return false;
-    if (!Number.isSafeInteger(header.size) || header.size < 0) return false;
+    if (!Number.isSafeInteger(header.size) || header.size < 0 || header.size > MAX_FILE_BYTES) return false;
     if (!/^[0-9A-F]{8}$/.test(header.crcHex)) return false;
     if (!Number.isSafeInteger(header.count) || header.count < 0) return false;
     if (!Number.isSafeInteger(header.chunkSize) || header.chunkSize < 0) return false;
 
     if (header.kind === 'text') {
-        return typeof header.textPayload === 'string';
+        return header.count === 0
+            && header.chunkSize === 0
+            && typeof header.textPayload === 'string';
     }
 
-    return Boolean(header.filename?.trim()) && header.count > 0 && header.chunkSize > 0;
+    if (!header.filename?.trim() || header.filename.length > 255) return false;
+    if (!isValidFileFrameCount(header.count)) return false;
+    if (header.chunkSize < 1 || header.chunkSize > MAX_CHUNK_SIZE) return false;
+
+    return header.count === Math.max(1, Math.ceil(header.size / header.chunkSize));
+}
+
+function isValidFileFrameCount(count: number): boolean {
+    return Number.isSafeInteger(count) && count >= 1 && count <= MAX_FILE_FRAMES;
 }
